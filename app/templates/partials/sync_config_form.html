@@ -19,7 +19,8 @@
 
     <div>
         <label class="block text-sm font-medium text-gray-700">Replica Path</label>
-        <input type="text" name="replica_path" value="{{ config.replica_path }}" class="mt-1 block w-full border rounded px-3 py-2" required>
+        <input type="text" name="replica_path" value="{{ config.replica_path }}" class="mt-1 block w-full border rounded px-3 py-2 bg-gray-100" readonly>
+        <p class="text-xs text-gray-500 mt-1">백업 경로는 시스템에서 관리됩니다.</p>
     </div>
 
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">

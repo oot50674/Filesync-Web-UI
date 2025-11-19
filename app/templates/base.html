@@ -29,20 +29,37 @@
     </style>
 </head>
 <body class="bg-gray-100 min-h-screen font-sans">
-    <div class="container mx-auto px-4 py-8">
-        <header class="mb-8 text-center">
-            <h1 class="text-3xl font-bold text-gray-800 mb-2">File Sync Web UI</h1>
-            <p class="text-gray-600">파일 동기화 설정 및 모니터링</p>
+    {% set page = active_page or '' %}
+    <div class="min-h-screen flex flex-col">
+        <header class="bg-white shadow-sm">
+            <div class="container mx-auto px-4 py-6 text-center">
+                <h1 class="text-3xl font-bold text-gray-800 mb-1">File Sync Web UI</h1>
+                <p class="text-gray-600">파일 동기화 설정 및 모니터링</p>
+            </div>
         </header>
 
-        <main>
-            {% block content %}{% endblock %}
-        </main>
+        <div class="container mx-auto px-4 py-8 flex-1 flex flex-col md:flex-row gap-6">
+            <aside class="md:w-56 bg-white rounded-lg shadow-sm p-4 h-fit">
+                <nav class="space-y-2">
+                    <a href="{{ url_for('main.index') }}"
+                       class="block px-3 py-2 rounded {{ 'bg-blue-600 text-white font-semibold' if page == 'sync' else 'text-gray-700 hover:bg-gray-100' }}">
+                        싱크 설정
+                    </a>
+                    <a href="{{ url_for('main.mounts_page') }}"
+                       class="block px-3 py-2 rounded {{ 'bg-blue-600 text-white font-semibold' if page == 'mounts' else 'text-gray-700 hover:bg-gray-100' }}">
+                        마운트 설정
+                    </a>
+                </nav>
+            </aside>
 
-        <footer class="mt-12 text-center text-sm text-gray-500">
+            <main class="flex-1">
+                {% block content %}{% endblock %}
+            </main>
+        </div>
+
+        <footer class="mt-4 text-center text-sm text-gray-500 pb-6">
             &copy; 2025 Project Skeleton.
         </footer>
     </div>
 </body>
 </html>
-

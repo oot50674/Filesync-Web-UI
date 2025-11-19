@@ -163,14 +163,46 @@ def wait_for_settle(file_path: Path, settle_seconds: int) -> bool:
             return True
 
 
-def build_destination_path(destination: Path, source_file: Path, overwrite_existing: bool = False) -> Path:
-    candidate = destination / source_file.name
-    if not candidate.exists():
-        return candidate
-    if overwrite_existing:
-        return candidate
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return destination / f"{source_file.stem}_{timestamp}{source_file.suffix}"
+def build_destination_path(
+    destination: Path,
+    source_file: Path,
+    mount_base: Optional[Path] = None,
+    overwrite_existing: bool = False
+) -> Path:
+    """
+    마운트 기준 경로(mount_base)를 기준으로 상대 경로를 계산하여
+    destination/mount_name/상대경로 형태로 복제합니다.
+    """
+    target_path: Path
+    if mount_base is not None:
+        try:
+            relative_path = source_file.relative_to(mount_base)
+        except ValueError:
+            relative_path = Path(source_file.name)
+        mount_name = mount_base.name or "mount"
+        target_path = destination / mount_name / relative_path
+    else:
+        target_path = destination / source_file.name
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if target_path.exists():
+        if overwrite_existing:
+            return target_path
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        renamed = "{0}_{1}{2}".format(target_path.stem, timestamp, target_path.suffix)
+        return target_path.with_name(renamed)
+    return target_path
+
+
+def build_relative_key(file_path: Path, mount_base: Optional[Path]) -> str:
+    if mount_base is None:
+        return file_path.name
+    try:
+        relative = file_path.relative_to(mount_base)
+        return str(relative)
+    except ValueError:
+        return file_path.name
 
 
 def format_size(num_bytes: float) -> str:
@@ -291,8 +323,19 @@ def copy_file_with_progress(source_file: Path, destination_path: Path, progress_
         progress_callback(source_file.name, total_size, total_size)
 
 
-def copy_backup(source_file: Path, destination: Path, overwrite_existing: bool = False, progress_callback=None) -> Optional[Path]:
-    destination_path = build_destination_path(destination, source_file, overwrite_existing=overwrite_existing)
+def copy_backup(
+    source_file: Path,
+    destination: Path,
+    mount_base: Optional[Path] = None,
+    overwrite_existing: bool = False,
+    progress_callback=None
+) -> Optional[Path]:
+    destination_path = build_destination_path(
+        destination,
+        source_file,
+        mount_base=mount_base,
+        overwrite_existing=overwrite_existing
+    )
     try:
         total_size = format_size(source_file.stat().st_size)
         logging.info(
@@ -303,6 +346,7 @@ def copy_backup(source_file: Path, destination: Path, overwrite_existing: bool =
         )
         if overwrite_existing and destination_path.exists():
             destination_path.unlink()
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
         copy_file_with_progress(source_file, destination_path, progress_callback=progress_callback)
         shutil.copystat(source_file, destination_path, follow_symlinks=True)
         logging.info("Copied %s -> %s", source_file, destination_path)
@@ -312,12 +356,17 @@ def copy_backup(source_file: Path, destination: Path, overwrite_existing: bool =
     return None
 
 
-def enforce_retention(destination: Path, retention_days: int, pattern: str) -> None:
+def enforce_retention(destination: Path, retention_days: int, pattern: str, mount_base: Optional[Path] = None) -> None:
     if retention_days <= 0:
         return
     threshold = datetime.now() - timedelta(days=retention_days)
     deleted = 0
-    for file_path in destination.iterdir():
+    base_path = destination
+    if mount_base is not None:
+        base_path = destination / mount_base.name
+    if not base_path.exists():
+        return
+    for file_path in base_path.rglob("*"):
         try:
             if not file_path.is_file():
                 continue
@@ -334,12 +383,19 @@ def enforce_retention(destination: Path, retention_days: int, pattern: str) -> N
         logging.info("Retention cleanup removed %s file(s).", deleted)
 
 
-def get_existing_backups(destination: Path, pattern: str) -> Dict[str, int]:
-    return {
-        f.name: f.stat().st_size
-        for f in destination.iterdir()
-        if f.is_file() and fnmatch.fnmatch(f.name, pattern)
-    }
+def get_existing_backups(destination: Path, pattern: str, mount_base: Optional[Path] = None) -> Dict[str, int]:
+    existing: Dict[str, int] = {}
+    base_path = destination if mount_base is None else destination / mount_base.name
+    if not base_path.exists():
+        return existing
+    for file_path in base_path.rglob("*"):
+        if not file_path.is_file():
+            continue
+        if not fnmatch.fnmatch(file_path.name, pattern):
+            continue
+        relative_key = str(file_path.relative_to(base_path))
+        existing[relative_key] = file_path.stat().st_size
+    return existing
 
 
 def remove_destination_file(destination: Path, file_name: str) -> None:
@@ -399,6 +455,7 @@ class FileSyncManager:
         now = time.time()
         # 처리 완료되어 목록에서 제거할 파일들
         processed_paths = []
+        mount_base = self.config.source
 
         if self.pending_files:
             logging.debug(f"대기열 상태 확인 - 총 {len(self.pending_files)}개 파일 처리 중")
@@ -434,7 +491,8 @@ class FileSyncManager:
                     # 복사 로직 시작
                     logging.info(f"대기열 - 파일 안정화 완료: {file_path.name} ({format_size(current_size)}), 대기시간: {elapsed:.1f}s, 복사 시작")
 
-                    dest_size = existing_backups.get(file_path.name)
+                    relative_key = build_relative_key(file_path, mount_base)
+                    dest_size = existing_backups.get(relative_key)
                     overwrite = False
 
                     if dest_size is not None:
@@ -455,19 +513,25 @@ class FileSyncManager:
                     copied_path = copy_backup(
                         file_path,
                         self.config.destination,
+                        mount_base=mount_base,
                         overwrite_existing=overwrite,
                         progress_callback=self._progress_callback
                     )
 
                     if copied_path:
-                        existing_backups[file_path.name] = current_size
+                        existing_backups[relative_key] = current_size
                         self._update_status(
                             state="IDLE",
                             details=f"Synced: {file_path.name}",
                             last_sync_time=datetime.utcnow().isoformat()
                         )
                         # 보존 정책 적용 (파일 하나 처리할 때마다 체크하면 안전함)
-                        enforce_retention(self.config.destination, self.config.retention_days, self.config.pattern)
+                        enforce_retention(
+                            self.config.destination,
+                            self.config.retention_days,
+                            self.config.pattern,
+                            mount_base=mount_base
+                        )
 
                     processed_paths.append(file_path)
 
@@ -494,14 +558,19 @@ class FileSyncManager:
 
         # 초기 스냅샷
         known_files = snapshot_matching_files(self.config.source, self.config.pattern)
-        existing_backups = get_existing_backups(self.config.destination, self.config.pattern)
+        existing_backups = get_existing_backups(
+            self.config.destination,
+            self.config.pattern,
+            mount_base=self.config.source
+        )
 
         # 초기 파일들을 모두 Pending 상태로 등록 (즉시 복사가 아니라 안정화 체크를 거치도록 함)
         now = time.time()
         for file_path, mtime in known_files.items():
-             # 이미 백업이 있고 크기도 같다면 스킵
-            if file_path.name in existing_backups:
-                if file_path.stat().st_size == existing_backups[file_path.name]:
+            # 이미 백업이 있고 크기도 같다면 스킵
+            relative_key = build_relative_key(file_path, self.config.source)
+            if relative_key in existing_backups:
+                if file_path.stat().st_size == existing_backups[relative_key]:
                     continue
 
             # 새로 발견된 것으로 간주하고 등록

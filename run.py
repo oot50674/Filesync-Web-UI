@@ -12,6 +12,16 @@ _pid_file_path = None
 
 def _configure_logging():
     log_file = os.environ.get(LOG_FILE_ENV)
+    # If no external FILESYNC_LOG_FILE provided, create a timestamped log file under ./logs
+    if not log_file:
+        try:
+            # run.py가 있는 위치(프로젝트 루트)의 logs 폴더 사용
+            default_dir = Path(__file__).resolve().parent / 'logs'
+            default_dir.mkdir(parents=True, exist_ok=True)
+            ts = __import__('datetime').datetime.now().strftime('%Y%m%d_%H%M%S')
+            log_file = str(default_dir / f'filesync_{ts}.log')
+        except Exception:
+            log_file = None
     handlers = []
     if log_file:
         try:

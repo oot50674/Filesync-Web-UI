@@ -18,8 +18,8 @@ sync_state = {
     'thread': None
 }
 
-DEFAULT_SOURCE_PATH = 'C:/'
-DEFAULT_REPLICA_PATH = 'D:/backup'
+DEFAULT_SOURCE_PATH = ''
+DEFAULT_REPLICA_PATH = ''
 
 
 def _default_status(details="Sync stopped"):

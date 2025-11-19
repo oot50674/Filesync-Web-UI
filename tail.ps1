@@ -13,7 +13,21 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 # 로그 파일 경로 결정
 if (!$LogFile) {
-    $LogFile = Join-Path $ScriptDir "logs\filesync.log"
+    $LogDir = Join-Path $ScriptDir "logs"
+    $LatestLog = $null
+    
+    if (Test-Path $LogDir) {
+        # 가장 최근 수정된 filesync_*.log 파일 찾기
+        $LatestLog = Get-ChildItem -Path $LogDir -Filter "filesync_*.log" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    }
+
+    if ($LatestLog) {
+        $LogFile = $LatestLog.FullName
+    }
+    else {
+        # 파일이 없으면 기본 파일명 사용
+        $LogFile = Join-Path $ScriptDir "logs\filesync.log"
+    }
 }
 
 # 로그 파일 존재 확인

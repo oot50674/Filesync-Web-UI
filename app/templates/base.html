@@ -1,39 +1,44 @@
 <!DOCTYPE html>
 <html lang="ko">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>File Sync Web UI</title>
-    
+
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
 
     <!-- HTMX: 서버와의 HTML 조각 교환을 담당 -->
-    <script src="https://unpkg.com/htmx.org@1.9.10" integrity="sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5xLSi8nO7UC" crossorigin="anonymous"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10"
+        integrity="sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5xLSi8nO7UC"
+        crossorigin="anonymous"></script>
 
     <!-- Alpine.js: 클라이언트 사이드 인터랙션 담당 -->
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.3/dist/cdn.min.js"></script>
-    
+
     <style>
         /* HTMX 로딩 인디케이터 스타일 */
         .htmx-indicator {
             opacity: 0;
             transition: opacity 200ms ease-in;
         }
+
         .htmx-request .htmx-indicator {
             opacity: 1;
         }
+
         .htmx-request.htmx-indicator {
             opacity: 1;
         }
     </style>
 </head>
+
 <body class="bg-gray-100 min-h-screen font-sans">
     <div class="min-h-screen flex flex-col">
         <header class="bg-white shadow-sm">
             <div class="container mx-auto px-4 py-6 text-center">
                 <h1 class="text-3xl font-bold text-gray-800 mb-1">File Sync Web UI</h1>
-                <p class="text-gray-600">파일 동기화 설정 및 모니터링</p>
             </div>
         </header>
 
@@ -46,4 +51,5 @@
         </footer>
     </div>
 </body>
+
 </html>

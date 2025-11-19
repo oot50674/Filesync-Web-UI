@@ -28,6 +28,10 @@ class PendingFile:
     stable_since: float  # 안정화가 시작된 시간 (timestamp)
 
 
+class CopyCancelled(Exception):
+    """복사 작업이 중단 요청으로 취소되었음을 나타내는 예외."""
+
+
 class SyncConfig:
     def __init__(
         self,
@@ -255,46 +259,72 @@ def _update_progress_line(message: str, finalize: bool = False) -> None:
     stream.flush()
 
 
-def copy_file_with_progress(source_file: Path, destination_path: Path, progress_callback=None) -> None:
+def copy_file_with_progress(
+    source_file: Path,
+    destination_path: Path,
+    progress_callback=None,
+    cancel_event: Optional[threading.Event] = None,
+) -> None:
     total_size = source_file.stat().st_size
     copied = 0
     next_log_threshold = PROGRESS_LOG_STEP
     total_size_str = format_size(total_size)
     progress_finished = False
+
+    def _should_cancel() -> bool:
+        return cancel_event is not None and cancel_event.is_set()
+
     if progress_callback:
         progress_callback(source_file.name, copied, total_size)
     _update_progress_line(
         f"Copying {source_file.name}: {progress_bar(0)} (0.0 B / {total_size_str})"
     )
-    with source_file.open("rb") as src, destination_path.open("wb") as dst:
-        while True:
-            chunk = src.read(COPY_CHUNK_SIZE)
-            if not chunk:
-                break
-            dst.write(chunk)
-            copied += len(chunk)
-            if progress_callback:
-                progress_callback(source_file.name, copied, total_size)
-            if total_size:
-                progress = copied / total_size
-                should_log = False
-                if copied == total_size:
-                    should_log = True
-                elif progress >= next_log_threshold:
-                    should_log = True
-                    while next_log_threshold <= progress:
-                        next_log_threshold += PROGRESS_LOG_STEP
-                if should_log:
-                    percent = min(int(progress * 100), 100)
-                    progress_finished = copied == total_size
+    try:
+        with source_file.open("rb") as src, destination_path.open("wb") as dst:
+            while True:
+                if _should_cancel():
+                    raise CopyCancelled(f"Copy cancelled: {source_file}")
+                chunk = src.read(COPY_CHUNK_SIZE)
+                if not chunk:
+                    break
+                dst.write(chunk)
+                copied += len(chunk)
+                if _should_cancel():
+                    raise CopyCancelled(f"Copy cancelled: {source_file}")
+                if progress_callback:
+                    progress_callback(source_file.name, copied, total_size)
+                if total_size:
+                    progress = copied / total_size
+                    should_log = False
+                    if copied == total_size:
+                        should_log = True
+                    elif progress >= next_log_threshold:
+                        should_log = True
+                        while next_log_threshold <= progress:
+                            next_log_threshold += PROGRESS_LOG_STEP
+                    if should_log:
+                        percent = min(int(progress * 100), 100)
+                        progress_finished = copied == total_size
+                        _update_progress_line(
+                            f"Copying {source_file.name}: {progress_bar(percent)} ({format_size(copied)} / {total_size_str})",
+                            finalize=progress_finished,
+                        )
+                else:
                     _update_progress_line(
-                        f"Copying {source_file.name}: {progress_bar(percent)} ({format_size(copied)} / {total_size_str})",
-                        finalize=progress_finished,
+                        f"Copying {source_file.name}: {format_size(copied)} copied"
                     )
-            else:
-                _update_progress_line(
-                    f"Copying {source_file.name}: {format_size(copied)} copied"
-                )
+    except CopyCancelled:
+        _update_progress_line(
+            f"Copying {source_file.name}: cancelled",
+            finalize=True,
+        )
+        raise
+    except Exception:
+        # 에러 발생 시(중단 포함) 파일 핸들이 닫힌 후 불완전한 파일 삭제 시도
+        # 여기서 삭제하지 않으면 0바이트 또는 잘린 파일이 남아 Lock의 원인이 될 수 있음
+        # 하지만 open 컨텍스트 매니저가 닫힌 후에 처리해야 함
+        raise 
+    
     if not total_size:
         _update_progress_line(
             f"Copying {source_file.name}: {progress_bar(100)} (0.0 B / 0.0 B)",
@@ -312,7 +342,8 @@ def copy_backup(
     destination: Path,
     source_root: Path,
     overwrite_existing: bool = False,
-    progress_callback=None
+    progress_callback=None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> Optional[Path]:
     destination_path = build_destination_path(
         destination,
@@ -320,6 +351,7 @@ def copy_backup(
         source_root,
         overwrite_existing=overwrite_existing
     )
+    copy_completed = False
     try:
         total_size = format_size(source_file.stat().st_size)
         logging.info(
@@ -329,35 +361,71 @@ def copy_backup(
             destination_path,
         )
         if overwrite_existing and destination_path.exists():
-            destination_path.unlink()
+            try:
+                destination_path.unlink()
+            except PermissionError:
+                logging.warning(f"Cannot delete existing file (in use): {destination_path}. Skipping copy.")
+                return None
         destination_path.parent.mkdir(parents=True, exist_ok=True)
-        copy_file_with_progress(source_file, destination_path, progress_callback=progress_callback)
+        copy_file_with_progress(
+            source_file,
+            destination_path,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+        )
         shutil.copystat(source_file, destination_path, follow_symlinks=True)
         logging.info("Copied %s -> %s", source_file, destination_path)
+        copy_completed = True
         return destination_path
+    except CopyCancelled:
+        logging.info("Copy cancelled for %s -> %s", source_file, destination_path)
+        raise
     except Exception:
         logging.exception("Failed to copy %s", source_file)
+    finally:
+        if not copy_completed:
+            try:
+                if destination_path.exists():
+                    destination_path.unlink()
+                    logging.info(f"Removed incomplete backup: {destination_path}")
+            except PermissionError:
+                logging.warning(f"Failed to remove incomplete backup (in use): {destination_path}")
+            except Exception:
+                logging.exception(f"Unexpected error while removing incomplete backup: {destination_path}")
     return None
 
 
 def enforce_retention(destination: Path, retention_days: int, pattern: str) -> None:
+    """
+    Retention 정책에 따라 destination 경로 내에서 pattern에 맞는 파일 중 
+    retention_days를 초과한 오래된 파일을 삭제합니다.
+
+    Args:
+        destination (Path): 백업 파일들이 위치한 루트 폴더.
+        retention_days (int): 보존 일수. 0 이하일 경우 retention 적용하지 않음.
+        pattern (str): 삭제대상 파일 이름 패턴(fnmatch 패턴).
+    """
     if retention_days <= 0:
+        # 보존일이 0 이하이면 retention policy를 적용하지 않음
         return
-    threshold = datetime.now() - timedelta(days=retention_days)
-    deleted = 0
+    threshold = datetime.now() - timedelta(days=retention_days)  # 삭제 임계점 시간 계산
+    deleted = 0  # 삭제된 파일 개수 카운터
     base_path = destination
     if not base_path.exists():
+        # 목적지 폴더가 존재하지 않으면 아무것도 하지 않음
         return
-    for file_path in base_path.rglob("*"):
+    for file_path in base_path.rglob("*"):  # 하위 모든 파일과 폴더 순회
         try:
             if not file_path.is_file():
+                # 디렉토리 등 파일이 아니면 건너뜀
                 continue
             if not fnmatch.fnmatch(file_path.name, pattern):
+                # 패턴에 일치하지 않으면 건너뜀
                 continue
             
-            # 다시 mtime 기준으로 복구 (백업 시 이미 오래된 파일은 걸러내므로)
-            modified = datetime.fromtimestamp(file_path.stat().st_mtime)
+            modified = datetime.fromtimestamp(file_path.stat().st_mtime)  # 마지막 수정시간
             if modified < threshold:
+                # 임계점 이전(즉, retention 기간을 초과함!)이면 삭제
                 file_path.unlink()
                 deleted += 1
                 logging.info("Removed expired backup: %s", file_path)
@@ -391,6 +459,7 @@ class FileSyncManager:
     def __init__(self, config: SyncConfig):
         self.config = config
         self.running = False
+        self._stop_event = threading.Event()
         self._status_lock = threading.Lock()
         self._status = {
             "state": "IDLE",
@@ -498,13 +567,19 @@ class FileSyncManager:
                         details=f"Starting copy for {file_path.name}"
                     )
 
-                    copied_path = copy_backup(
-                        file_path,
-                        self.config.destination,
-                        self.config.source, # source_root 전달
-                        overwrite_existing=overwrite,
-                        progress_callback=self._progress_callback
-                    )
+                    try:
+                        copied_path = copy_backup(
+                            file_path,
+                            self.config.destination,
+                            self.config.source, # source_root 전달
+                            overwrite_existing=overwrite,
+                            progress_callback=self._progress_callback,
+                            cancel_event=self._stop_event,
+                        )
+                    except CopyCancelled:
+                        logging.info(f"Copy operation cancelled for {file_path.name}")
+                        processed_paths.append(file_path)
+                        break
 
                     if copied_path:
                         existing_backups[file_key] = current_size
@@ -513,7 +588,7 @@ class FileSyncManager:
                             details=f"Synced: {file_path.name}",
                             last_sync_time=datetime.utcnow().isoformat()
                         )
-                        # 보존 정책 적용 (파일 하나 처리할 때마다 체크하면 안전함)
+                        # 보존 정책 적용
                         enforce_retention(
                             self.config.destination,
                             self.config.retention_days,
@@ -540,6 +615,7 @@ class FileSyncManager:
             )
 
     def run(self) -> None:
+        self._stop_event.clear()
         self.running = True
         self._update_status(
             state="SCANNING",
@@ -628,6 +704,7 @@ class FileSyncManager:
 
     def stop(self):
         logging.info("Stop signal received.")
+        self._stop_event.set()
         self.running = False
         self._update_status(
             state="STOPPED",

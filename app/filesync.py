@@ -5,7 +5,9 @@ import fnmatch
 import logging
 import shutil
 import sys
+import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Optional
@@ -16,6 +18,14 @@ DEFAULT_SCAN_INTERVAL = 10
 DEFAULT_SETTLE_SECONDS = 10
 COPY_CHUNK_SIZE = 8 * 1024 * 1024
 PROGRESS_LOG_STEP = 0.01
+
+
+@dataclass
+class PendingFile:
+    path: Path
+    last_size: int
+    last_mtime: float
+    stable_since: float  # 안정화가 시작된 시간 (timestamp)
 
 
 class SyncConfig:
@@ -229,12 +239,14 @@ def _update_progress_line(message: str, finalize: bool = False) -> None:
     stream.flush()
 
 
-def copy_file_with_progress(source_file: Path, destination_path: Path) -> None:
+def copy_file_with_progress(source_file: Path, destination_path: Path, progress_callback=None) -> None:
     total_size = source_file.stat().st_size
     copied = 0
     next_log_threshold = PROGRESS_LOG_STEP
     total_size_str = format_size(total_size)
     progress_finished = False
+    if progress_callback:
+        progress_callback(source_file.name, copied, total_size)
     _update_progress_line(
         f"Copying {source_file.name}: {progress_bar(0)} (0.0 B / {total_size_str})"
     )
@@ -245,6 +257,8 @@ def copy_file_with_progress(source_file: Path, destination_path: Path) -> None:
                 break
             dst.write(chunk)
             copied += len(chunk)
+            if progress_callback:
+                progress_callback(source_file.name, copied, total_size)
             if total_size:
                 progress = copied / total_size
                 should_log = False
@@ -273,9 +287,11 @@ def copy_file_with_progress(source_file: Path, destination_path: Path) -> None:
         progress_finished = True
     if not progress_finished:
         _update_progress_line("", finalize=True)
+    if progress_callback:
+        progress_callback(source_file.name, total_size, total_size)
 
 
-def copy_backup(source_file: Path, destination: Path, overwrite_existing: bool = False) -> Optional[Path]:
+def copy_backup(source_file: Path, destination: Path, overwrite_existing: bool = False, progress_callback=None) -> Optional[Path]:
     destination_path = build_destination_path(destination, source_file, overwrite_existing=overwrite_existing)
     try:
         total_size = format_size(source_file.stat().st_size)
@@ -287,7 +303,7 @@ def copy_backup(source_file: Path, destination: Path, overwrite_existing: bool =
         )
         if overwrite_existing and destination_path.exists():
             destination_path.unlink()
-        copy_file_with_progress(source_file, destination_path)
+        copy_file_with_progress(source_file, destination_path, progress_callback=progress_callback)
         shutil.copystat(source_file, destination_path, follow_symlinks=True)
         logging.info("Copied %s -> %s", source_file, destination_path)
         return destination_path
@@ -340,97 +356,216 @@ class FileSyncManager:
     def __init__(self, config: SyncConfig):
         self.config = config
         self.running = False
+        self._status_lock = threading.Lock()
+        self._status = {
+            "state": "IDLE",
+            "current_file": "",
+            "progress_percent": 0,
+            "details": "",
+            "last_sync_time": "",
+            "updated_at": "",
+        }
+        # 변경점: 대기 중인 파일들을 관리할 딕셔너리
+        self.pending_files: Dict[Path, PendingFile] = {}
+
+    def _update_status(self, **kwargs) -> None:
+        with self._status_lock:
+            self._status.update(kwargs)
+            self._status["updated_at"] = datetime.utcnow().isoformat()
+
+    def _progress_callback(self, filename: str, copied: int, total: int) -> None:
+        # (기존 코드와 동일)
+        percent = 0
+        if total:
+            percent = int((float(copied) / float(total)) * 100)
+        detail = f"Copying {filename}"
+        if total:
+            detail = (
+                f"{filename}: {format_size(copied)} / {format_size(total)}"
+            )
+        self._update_status(
+            state="COPYING",
+            current_file=filename,
+            progress_percent=min(percent, 100),
+            details=detail,
+        )
+
+    def get_status(self) -> Dict[str, str]:
+        with self._status_lock:
+            return dict(self._status)
+
+    def _process_pending_files(self, existing_backups: Dict[str, int]):
+        """대기열에 있는 파일들의 안정화 여부를 확인하고 복사 수행"""
+        now = time.time()
+        # 처리 완료되어 목록에서 제거할 파일들
+        processed_paths = []
+
+        if self.pending_files:
+            logging.debug(f"대기열 상태 확인 - 총 {len(self.pending_files)}개 파일 처리 중")
+
+        # 딕셔너리 복사본으로 순회 (순회 중 삭제 방지)
+        for file_path, info in list(self.pending_files.items()):
+            if not self.running:
+                break
+
+            try:
+                # 파일이 삭제된 경우 처리
+                if not file_path.exists():
+                    logging.warning(f"File disappeared pending copy: {file_path}")
+                    processed_paths.append(file_path)
+                    continue
+
+                stat = file_path.stat()
+                current_size = stat.st_size
+                current_mtime = stat.st_mtime
+
+                # 파일 상태가 변했는지 확인
+                if current_size != info.last_size or current_mtime != info.last_mtime:
+                    # 변했다면 정보 갱신하고 타이머 리셋
+                    info.last_size = current_size
+                    info.last_mtime = current_mtime
+                    info.stable_since = now
+                    logging.debug(f"대기열 - 파일 변경 감지: {file_path.name} ({format_size(current_size)}), 안정화 타이머 리셋")
+                    continue
+
+                # 안정화 시간 충족 여부 확인
+                elapsed = now - info.stable_since
+                if elapsed >= self.config.settle_seconds:
+                    # 복사 로직 시작
+                    logging.info(f"대기열 - 파일 안정화 완료: {file_path.name} ({format_size(current_size)}), 대기시간: {elapsed:.1f}s, 복사 시작")
+
+                    dest_size = existing_backups.get(file_path.name)
+                    overwrite = False
+
+                    if dest_size is not None:
+                        if dest_size == current_size:
+                            # 이미 완료된 파일이면 스킵
+                            processed_paths.append(file_path)
+                            continue
+                        # 크기가 다르면 덮어쓰기
+                        overwrite = True
+                        logging.warning(f"Incomplete backup detected for {file_path.name}, overwriting.")
+
+                    self._update_status(
+                        state="COPYING",
+                        current_file=file_path.name,
+                        details=f"Starting copy for {file_path.name}"
+                    )
+
+                    copied_path = copy_backup(
+                        file_path,
+                        self.config.destination,
+                        overwrite_existing=overwrite,
+                        progress_callback=self._progress_callback
+                    )
+
+                    if copied_path:
+                        existing_backups[file_path.name] = current_size
+                        self._update_status(
+                            state="IDLE",
+                            details=f"Synced: {file_path.name}",
+                            last_sync_time=datetime.utcnow().isoformat()
+                        )
+                        # 보존 정책 적용 (파일 하나 처리할 때마다 체크하면 안전함)
+                        enforce_retention(self.config.destination, self.config.retention_days, self.config.pattern)
+
+                    processed_paths.append(file_path)
+
+            except Exception:
+                logging.exception(f"Error processing pending file: {file_path}")
+                processed_paths.append(file_path)
+
+        # 처리된 파일 대기열에서 제거
+        for path in processed_paths:
+            self.pending_files.pop(path, None)
+
+        if processed_paths:
+            logging.info(f"대기열 정리 완료: {len(processed_paths)}개 파일 처리됨, 남은 대기 파일: {len(self.pending_files)}개")
 
     def run(self) -> None:
         self.running = True
-        logging.info(
-            "Configured parameters: source=%s, destination=%s, pattern=%s, retention_days=%d, scan_interval=%d, settle_seconds=%d, log_level=%s",
-            self.config.source,
-            self.config.destination,
-            self.config.pattern,
-            self.config.retention_days,
-            self.config.scan_interval,
-            self.config.settle_seconds,
-            self.config.log_level,
+        self._update_status(
+            state="SCANNING",
+            details=f"Watching {self.config.source} -> {self.config.destination}",
         )
+        logging.info(f"Started Watcher. Poll interval: {self.config.scan_interval}s, Settle time: {self.config.settle_seconds}s")
+
         validate_paths(self.config.source, self.config.destination)
+
+        # 초기 스냅샷
         known_files = snapshot_matching_files(self.config.source, self.config.pattern)
         existing_backups = get_existing_backups(self.config.destination, self.config.pattern)
-        logging.info(
-            "Watching %s for files matching '%s'. Copying to %s. Retention: %s day(s).",
-            self.config.source,
-            self.config.pattern,
-            self.config.destination,
-            self.config.retention_days,
-        )
-        
-        # Initial copy loop
-        for file_path in known_files:
-            if not self.running:
-                break
-            source_size = file_path.stat().st_size
-            dest_size = existing_backups.get(file_path.name)
-            if dest_size == source_size:
-                continue
-            overwrite_existing = dest_size is not None and dest_size != source_size
-            if overwrite_existing:
-                logging.warning("Detected incomplete backup %s (%s vs %s), re-copying.", file_path.name, format_size(dest_size), format_size(source_size))
-                remove_destination_file(self.config.destination, file_path.name)
-            else:
-                logging.info("Initial copy: %s not found in destination, copying...", file_path.name)
-            
-            if not wait_for_settle(file_path, self.config.settle_seconds):
-                logging.warning("Skipping %s because it did not stabilize.", file_path)
-                continue
-            
-            copied = copy_backup(file_path, self.config.destination, overwrite_existing=overwrite_existing)
-            if copied:
-                enforce_retention(self.config.destination, self.config.retention_days, self.config.pattern)
-                existing_backups[file_path.name] = source_size
 
-        # Monitoring loop
+        # 초기 파일들을 모두 Pending 상태로 등록 (즉시 복사가 아니라 안정화 체크를 거치도록 함)
+        now = time.time()
+        for file_path, mtime in known_files.items():
+             # 이미 백업이 있고 크기도 같다면 스킵
+            if file_path.name in existing_backups:
+                if file_path.stat().st_size == existing_backups[file_path.name]:
+                    continue
+
+            # 새로 발견된 것으로 간주하고 등록
+            try:
+                stat = file_path.stat()
+                self.pending_files[file_path] = PendingFile(
+                    path=file_path,
+                    last_size=stat.st_size,
+                    last_mtime=stat.st_mtime,
+                    stable_since=now
+                )
+                logging.info(f"대기열 등록 - 초기 파일: {file_path.name} ({format_size(stat.st_size)}), 총 대기 파일: {len(self.pending_files)}개")
+            except FileNotFoundError:
+                continue
+
         try:
             while self.running:
-                logging.debug("Scanning for new files...")
-                new_files = detect_new_files(self.config.source, self.config.pattern, known_files)
-                if new_files:
-                    logging.info("Detected %d new file(s).", len(new_files))
-                for file_path in new_files:
-                    if not self.running:
-                        break
-                    if not fnmatch.fnmatch(file_path.name, self.config.pattern):
-                        continue
-                    source_size = file_path.stat().st_size
-                    dest_size = existing_backups.get(file_path.name)
-                    if dest_size == source_size:
-                        continue
-                    overwrite_existing = dest_size is not None and dest_size != source_size
-                    if overwrite_existing:
-                        logging.warning("Detected incomplete backup %s (%s vs %s), re-copying.", file_path.name, format_size(dest_size), format_size(source_size))
-                        remove_destination_file(self.config.destination, file_path.name)
-                    
-                    if not wait_for_settle(file_path, self.config.settle_seconds):
-                        logging.warning("Skipping %s because it did not stabilize.", file_path)
-                        continue
-                    
-                    copied = copy_backup(file_path, self.config.destination, overwrite_existing=overwrite_existing)
-                    if copied:
-                        enforce_retention(self.config.destination, self.config.retention_days, self.config.pattern)
-                        existing_backups[file_path.name] = source_size
-                
-                # Sleep in small chunks to allow faster stopping
-                for _ in range(max(1, self.config.scan_interval)):
-                    if not self.running:
-                        break
-                    time.sleep(1)
+                # 1. 새로운 파일 스캔
+                new_detected = detect_new_files(self.config.source, self.config.pattern, known_files)
+                if new_detected:
+                    now = time.time()
+                    for file_path in new_detected:
+                        if file_path not in self.pending_files:
+                            try:
+                                stat = file_path.stat()
+                                self.pending_files[file_path] = PendingFile(
+                                    path=file_path,
+                                    last_size=stat.st_size,
+                                    last_mtime=stat.st_mtime,
+                                    stable_since=now
+                                )
+                                logging.info(f"대기열 등록 - 새 파일 감지: {file_path.name} ({format_size(stat.st_size)}), 총 대기 파일: {len(self.pending_files)}개")
+                            except FileNotFoundError:
+                                pass
+
+                # 2. 대기열에 있는 파일들의 안정화 확인 및 복사 수행
+                # 대기열이 비어있지 않다면 1초 간격으로 체크 (빠른 반응)
+                # 대기열이 비어있다면 scan_interval 만큼 대기
+
+                if self.pending_files:
+                    self._process_pending_files(existing_backups)
+                    time.sleep(1) # 파일 처리 중에는 1초 딜레이 (CPU 과부하 방지)
+                else:
+                    # 대기 중인 파일이 없으면 설정된 스캔 간격만큼 대기하되, 반응성을 위해 1초씩 끊어서 대기
+                    for _ in range(self.config.scan_interval):
+                        if not self.running or self.pending_files: # 새 파일이 감지되면 즉시 루프 탈출 로직 추가 가능
+                            break
+                        time.sleep(1)
+
         except KeyboardInterrupt:
             logging.info("Stopping backup watcher.")
         finally:
             self.running = False
+            self._update_status(state="STOPPED", details="Sync stopped")
 
     def stop(self):
         logging.info("Stop signal received.")
         self.running = False
+        self._update_status(
+            state="STOPPED",
+            current_file="",
+            progress_percent=0,
+            details="Stopping...",
+        )
 
 
 def main() -> None:

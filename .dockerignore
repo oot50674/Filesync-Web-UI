@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+.git/
+.env
+database.db
+doc/
+AGENTS.md
+

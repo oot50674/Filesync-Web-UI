@@ -1,5 +1,15 @@
 from flask import Flask
 import os
+import logging
+
+
+class StatusPollingFilter(logging.Filter):
+    """HTMX 상태 폴링 라우트(GET /filesync/status) 로그를 숨기기 위한 필터"""
+
+    def filter(self, record):
+        message = record.getMessage()
+        return "/filesync/status" not in message
+
 
 def create_app():
     # Flask 앱 인스턴스 생성
@@ -15,8 +25,23 @@ def create_app():
     from . import db
     db.init_app(app)
 
+    # 서버 기동 시 DB 파일이 없으면 자동으로 스키마를 적용
+    database_path = app.config['DATABASE']
+    if not os.path.exists(database_path):
+        os.makedirs(os.path.dirname(database_path), exist_ok=True)
+        with app.app_context():
+            db.init_db()
+
     # 블루프린트(라우트) 등록
     from .routes import main
     app.register_blueprint(main)
+
+    # 불필요한 상태 폴링 로그(werkzeug) 필터링
+    werkzeug_logger = logging.getLogger("werkzeug")
+    already_registered = any(
+        isinstance(f, StatusPollingFilter) for f in werkzeug_logger.filters
+    )
+    if not already_registered:
+        werkzeug_logger.addFilter(StatusPollingFilter())
 
     return app

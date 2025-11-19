@@ -1,236 +1,137 @@
-# Flask + HTMX + Alpine.js 프로젝트 스켈레톤
+# Filesync Web UI
 
-새로운 웹 프로젝트를 빠르게 시작하기 위한 경량 스켈레톤입니다. Flask(백엔드), HTMX(서버 인터랙션), Alpine.js(클라이언트 인터랙션)가 미리 설정되어 있어 바로 개발을 시작할 수 있습니다.
+**Filesync Web UI**는 로컬 파일 동기화 작업을 관리하고 모니터링하기 위한 웹 기반 인터페이스입니다.  
+Python과 Flask로 구축되었으며, HTMX를 사용하여 페이지 새로고침 없이 실시간으로 동기화 상태를 확인할 수 있습니다.
 
-## 🎯 이 스켈레톤의 목적
+## ✨ 주요 기능
 
-이 프로젝트는 **실제 애플리케이션이 아니라**, 새로운 프로젝트를 시작할 때 사용할 수 있는 **기반 템플릿**입니다. 
-
-- ✅ Flask 앱 구조가 미리 설정되어 있음
-- ✅ HTMX와 Alpine.js가 통합되어 있음
-- ✅ SQLite 데이터베이스 연결 및 초기화 기능 포함
-- ✅ 예제 코드로 각 기술의 사용법을 확인할 수 있음
-- ✅ 필요에 따라 예제 코드를 삭제하고 본인의 기능으로 교체 가능
-
-## 📋 목차
-
-- [기술 스택](#기술-스택)
-- [빠른 시작](#빠른-시작)
-- [프로젝트 구조](#프로젝트-구조)
-- [사용 방법](#사용-방법)
-- [개발 가이드](#개발-가이드)
+- **동기화 설정 관리**:
+  - 원본(Source) 및 대상(Replica) 폴더 경로 설정
+  - 파일명 패턴 필터링 (예: `*.log`, `backup_*`)
+  - 스캔 간격 및 파일 보존 기간(Retention Days) 설정
+- **동기화 제어**: 웹 인터페이스에서 동기화 프로세스를 시작하거나 중지할 수 있습니다.
+- **실시간 상태 모니터링**:
+  - 현재 처리 중인 파일, 진행률, 상태(IDLE, SCANNING, COPYING 등)를 실시간으로 표시합니다.
+  - HTMX 폴링을 통해 서버 부하를 최소화하며 UI를 업데이트합니다.
+- **안정화 대기(Settle Time)**: 파일 복사 전 파일 크기/수정 시간이 안정화될 때까지 대기하여 불완전한 복사를 방지합니다.
+- **자동 정리**: 설정된 보존 기간이 지난 백업 파일을 대상 폴더에서 자동으로 삭제합니다.
 
 ## 🛠 기술 스택
 
-- **Backend**: Flask (Python)
-- **Frontend Interaction**: HTMX (AJAX 대체, HTML 조각 교환)
-- **Frontend Logic**: Alpine.js (경량 Vue/React 대체)
+- **Backend**: Python 3, Flask
+- **Frontend**: HTML5, HTMX, Alpine.js, Tailwind CSS (Inline/Utility classes)
 - **Database**: SQLite
-- **Styling**: Tailwind CSS (CDN)
+- **Process Management**: Python `threading`을 이용한 백그라운드 동기화 프로세스 관리
 
-## 🚀 빠른 시작
+## 🚀 설치 및 실행 방법
 
-### 1. 프로젝트 복사
+### 1. 환경 설정
 
-이 스켈레톤을 새 프로젝트 디렉토리로 복사하거나 클론합니다.
-
-### 2. 가상환경 생성 및 활성화
+프로젝트 루트 디렉토리에서 가상 환경을 생성하고 활성화합니다.
 
 ```bash
-# Windows
+# 가상 환경 생성
 python -m venv venv
+
+# 가상 환경 활성화 (Windows)
 venv\Scripts\activate
 
-# Mac/Linux
-python3 -m venv venv
+# 가상 환경 활성화 (macOS/Linux)
 source venv/bin/activate
 ```
 
-### 3. 의존성 설치
+### 2. 의존성 설치
+
+필요한 Python 패키지를 설치합니다.
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. 데이터베이스 초기화 (필요한 경우)
+### 3. 데이터베이스 초기화
+
+최초 실행 전 또는 스키마 변경 시 데이터베이스를 초기화합니다.
 
 ```bash
 flask init-db
 ```
 
-### 5. 서버 실행
+### 4. 서버 실행
+
+개발 서버를 실행합니다.
 
 ```bash
 python run.py
 ```
 
-브라우저에서 `http://127.0.0.1:5000` 접속하여 예제를 확인할 수 있습니다.
+서버가 시작되면 브라우저에서 `http://127.0.0.1:5120`으로 접속하여 사용할 수 있습니다.
 
-## 📁 프로젝트 구조
+## 🐳 Docker를 사용한 실행 방법
+
+Docker를 사용하면 로컬 환경 설정 없이 간편하게 애플리케이션을 실행할 수 있습니다.
+
+### 사전 요구사항
+
+- [Docker](https://www.docker.com/get-started) 설치
+- [Docker Compose](https://docs.docker.com/compose/install/) 설치
+
+### 실행 방법
+
+1. **이미지 빌드 및 컨테이너 실행**:
+   ```bash
+   docker-compose up --build
+   ```
+
+2. **백그라운드 실행**:
+   ```bash
+   docker-compose up -d --build
+   ```
+
+3. **컨테이너 중지**:
+   ```bash
+   docker-compose down
+   ```
+
+4. **접속**: 브라우저에서 `http://localhost:5120`으로 접속합니다.
+
+### 볼륨 마운트 설정
+
+파일 동기화 기능을 사용하려면 호스트의 폴더를 컨테이너에 마운트해야 합니다. `docker-compose.yml` 파일의 `volumes` 섹션을 수정하여 실제 동기화할 폴더 경로를 지정하세요:
+
+```yaml
+volumes:
+  - ./database.db:/app/database.db
+  - /path/to/your/source:/app/sync_source    # 원본 폴더 경로
+  - /path/to/your/replica:/app/sync_replica   # 대상 폴더 경로
+```
+
+웹 UI에서 설정할 때는 컨테이너 내부 경로(예: `/app/sync_source`, `/app/sync_replica`)를 입력해야 합니다.
+
+## 📂 프로젝트 구조
 
 ```
-new_project/
+Filesync-Web-UI/
 ├── app/
-│   ├── __init__.py           # Flask 앱 팩토리 (앱 초기화)
-│   ├── db.py                 # 데이터베이스 연결 및 초기화 유틸리티
-│   ├── routes.py             # 라우트 정의 (예제 라우트 포함)
-│   ├── schema.sql            # 데이터베이스 스키마 (예제 테이블)
-│   ├── static/               # 정적 파일 (CSS, JS, 이미지)
-│   └── templates/            # HTML 템플릿
-│       ├── base.html         # 기본 레이아웃 (HTMX, Alpine.js 로드)
-│       ├── index.html        # 메인 페이지 (예제 포함)
-│       └── partials/         # HTMX용 HTML 조각 (예제 Partial)
-│           ├── time.html
-│           └── todo_list.html
-├── database.db               # SQLite 데이터베이스 파일 (자동 생성)
-├── run.py                    # 애플리케이션 실행 엔트리포인트
-├── requirements.txt          # Python 의존성 목록
-└── README.md                 # 프로젝트 문서
+│   ├── __init__.py      # Flask 앱 팩토리 및 설정
+│   ├── db.py            # SQLite 데이터베이스 연결 관리
+│   ├── filesync.py      # 파일 동기화 핵심 로직 (Watcher, Copier)
+│   ├── routes.py        # 웹 라우트 및 HTMX 엔드포인트
+│   ├── schema.sql       # 데이터베이스 스키마 (sync_configs)
+│   ├── static/          # 정적 파일 (CSS, JS)
+│   └── templates/       # Jinja2 템플릿
+│       ├── base.html    # 기본 레이아웃
+│       ├── index.html   # 메인 페이지
+│       └── partials/    # HTMX용 HTML 조각 (설정 폼, 상태 표시)
+├── doc/                 # 문서 (HTMX, Alpine.js 가이드 등)
+├── run.py               # 애플리케이션 진입점
+├── requirements.txt     # 의존성 목록
+├── Dockerfile           # Docker 이미지 빌드 설정
+├── docker-compose.yml   # Docker Compose 설정
+├── .dockerignore        # Docker 빌드 시 제외 파일 목록
+└── README.md            # 프로젝트 설명서
 ```
 
-## 💡 사용 방법
+## 📝 라이선스
 
-### 1. 프로젝트 이름 변경
+이 프로젝트는 MIT 라이선스를 따릅니다.
 
-프로젝트를 복사한 후, 다음을 수정하세요:
-- 디렉토리 이름
-- `app/__init__.py`의 앱 설정
-- `base.html`의 타이틀 및 메타 정보
-
-### 2. 예제 코드 제거 또는 수정
-
-현재 포함된 예제 코드들:
-- **Todo 관리 예제** (`routes.py`의 Todo 관련 라우트, `todo_list.html`)
-- **Alpine.js 예제** (`index.html`의 카운터 및 토글)
-- **서버 시간 예제** (`routes.py`의 `/time` 라우트, `time.html`)
-
-이 예제들은 각 기술의 사용법을 보여주는 데모입니다. 본인의 프로젝트에 맞게 수정하거나 삭제하세요.
-
-### 3. 데이터베이스 스키마 수정
-
-`app/schema.sql` 파일을 수정하여 본인의 데이터베이스 스키마를 정의하세요.
-
-## 📚 개발 가이드
-
-### 새로운 라우트 추가
-
-`app/routes.py`에 새로운 라우트를 추가합니다:
-
-```python
-@main.route('/your-route')
-def your_handler():
-    # 로직 구현
-    return render_template('your_template.html', data=data)
-```
-
-### HTMX 사용하기
-
-HTMX는 HTML 속성을 통해 서버와 통신합니다:
-
-```html
-<!-- GET 요청 예제 -->
-<button hx-get="/api/data" hx-target="#result">데이터 가져오기</button>
-<div id="result"></div>
-
-<!-- POST 요청 예제 -->
-<form hx-post="/api/submit" hx-target="#result">
-    <input name="data" />
-    <button type="submit">제출</button>
-</form>
-```
-
-주요 HTMX 속성:
-- `hx-get`, `hx-post`, `hx-put`, `hx-delete` - HTTP 메서드 지정
-- `hx-target` - 응답을 삽입할 대상 요소 (CSS 선택자)
-- `hx-swap` - 삽입 방식 (`innerHTML`, `outerHTML`, `beforebegin`, `afterend` 등)
-- `hx-confirm` - 확인 대화상자 표시
-- `hx-on::after-request` - 요청 후 실행할 JavaScript
-
-### Alpine.js 사용하기
-
-Alpine.js는 경량 JavaScript 프레임워크로 클라이언트 상태를 관리합니다:
-
-```html
-<div x-data="{ count: 0, isOpen: false }">
-    <p x-text="count"></p>
-    <button @click="count++">증가</button>
-    <button @click="isOpen = !isOpen">토글</button>
-    <div x-show="isOpen" x-transition>내용</div>
-</div>
-```
-
-주요 Alpine.js 지시어:
-- `x-data` - 컴포넌트 상태 선언
-- `x-text`, `x-html` - 텍스트/HTML 바인딩
-- `@click`, `@input`, `@submit` - 이벤트 핸들러
-- `x-show`, `x-if` - 조건부 렌더링
-- `x-for` - 리스트 렌더링
-- `x-transition` - 전환 효과
-
-### Partial 템플릿 사용
-
-HTMX와 함께 사용할 HTML 조각은 `app/templates/partials/` 디렉토리에 저장합니다:
-
-```python
-# routes.py
-@main.route('/api/data')
-def get_data():
-    data = fetch_data()
-    return render_template('partials/data.html', data=data)
-```
-
-### 데이터베이스 작업
-
-`app/db.py`의 `get_db()` 함수를 사용하여 데이터베이스 연결을 가져옵니다:
-
-```python
-from app.db import get_db
-
-db = get_db()
-
-# 조회
-results = db.execute('SELECT * FROM table_name').fetchall()
-
-# 단일 행 조회
-result = db.execute('SELECT * FROM table_name WHERE id = ?', [id]).fetchone()
-
-# 삽입
-db.execute('INSERT INTO table_name (column) VALUES (?)', [value])
-db.commit()
-
-# 업데이트
-db.execute('UPDATE table_name SET column = ? WHERE id = ?', [value, id])
-db.commit()
-
-# 삭제
-db.execute('DELETE FROM table_name WHERE id = ?', [id])
-db.commit()
-```
-
-### 정적 파일 사용
-
-CSS, JavaScript, 이미지 파일은 `app/static/` 디렉토리에 저장하고, 템플릿에서 다음과 같이 참조합니다:
-
-```html
-<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-<script src="{{ url_for('static', filename='js/script.js') }}"></script>
-<img src="{{ url_for('static', filename='images/logo.png') }}" alt="Logo">
-```
-
-## 📝 참고 자료
-
-- [Flask 공식 문서](https://flask.palletsprojects.com/)
-- [HTMX 공식 문서](https://htmx.org/)
-- [Alpine.js 공식 문서](https://alpinejs.dev/)
-- [Tailwind CSS 공식 문서](https://tailwindcss.com/)
-
-## 🔄 다음 단계
-
-1. 예제 코드를 본인의 기능으로 교체
-2. 데이터베이스 스키마 수정
-3. 필요한 추가 라이브러리 설치 및 설정
-4. 프로덕션 환경 설정 (환경 변수, 보안 설정 등)
-
-## 📄 라이선스
-
-이 스켈레톤은 학습 및 개발 목적으로 자유롭게 사용할 수 있습니다.

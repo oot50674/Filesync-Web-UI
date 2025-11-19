@@ -7,6 +7,7 @@ HTMX를 사용한 부분 렌더링과 서버 사이드 렌더링을 결합한 �
 from flask import Blueprint, render_template, request, current_app
 from datetime import datetime
 import threading
+import logging
 from pathlib import Path
 from app.db import get_db
 from app.filesync import FileSyncManager, SyncConfig
@@ -16,6 +17,25 @@ sync_state = {
     'manager': None,
     'thread': None
 }
+
+
+def _default_status(details="Sync stopped"):
+    return {
+        'state': 'STOPPED',
+        'current_file': '',
+        'progress_percent': 0,
+        'details': details,
+        'last_sync_time': '',
+        'updated_at': datetime.utcnow().isoformat()
+    }
+
+
+def _get_status_context(details=None):
+    manager = sync_state['manager']
+    if manager:
+        return manager.running, manager.get_status()
+    message = details if details else "Sync stopped"
+    return False, _default_status(message)
 
 # 메인 블루프린트 정의
 # Blueprint를 사용하여 라우트를 모듈화하고 관리합니다
@@ -44,7 +64,8 @@ def index():
             'retention_days': 60
         }
 
-    return render_template('index.html', config=config, is_running=sync_state['manager'] is not None and sync_state['manager'].running)
+    is_running, status = _get_status_context()
+    return render_template('index.html', config=config, is_running=is_running, status=status)
 
 
 
@@ -94,8 +115,8 @@ def get_sync_status():
     """
     [HTMX] 동기화 상태 폴링
     """
-    is_running = sync_state['manager'] is not None and sync_state['manager'].running
-    return render_template('partials/sync_status.html', is_running=is_running)
+    is_running, status = _get_status_context()
+    return render_template('partials/sync_status.html', is_running=is_running, status=status)
 
 
 @main.route('/filesync/start', methods=['POST'])
@@ -104,15 +125,17 @@ def start_sync():
     [HTMX] 동기화 시작
     """
     if sync_state['manager'] and sync_state['manager'].running:
-        return render_template('partials/sync_status.html', is_running=True)
+        is_running, status = _get_status_context()
+        return render_template('partials/sync_status.html', is_running=is_running, status=status)
 
     db = get_db()
     config_row = db.execute('SELECT * FROM sync_configs ORDER BY id LIMIT 1').fetchone()
     
     if not config_row:
         # 설정이 없으면 시작 불가
-        return render_template('partials/sync_status.html', is_running=False)
-        
+        is_running, status = _get_status_context(details="동기화 설정이 필요합니다.")
+        return render_template('partials/sync_status.html', is_running=is_running, status=status)
+
     try:
         # Config 객체 생성
         sync_config = SyncConfig(
@@ -122,23 +145,32 @@ def start_sync():
             retention_days=config_row['retention_days'],
             scan_interval=config_row['interval']
         )
-        
+
+        # 동기화 스레드 시작 전에 로그 구성 (CLI와 동일하게 INFO 레벨 설정)
+        if not logging.getLogger().handlers:
+            logging.basicConfig(
+                level=logging.INFO,
+                format="%(asctime)s - %(levelname)s - %(message)s",
+            )
+
         # Manager 초기화 및 스레드 시작
         manager = FileSyncManager(sync_config)
         thread = threading.Thread(target=manager.run, daemon=True)
         thread.start()
-        
+
         sync_state['manager'] = manager
         sync_state['thread'] = thread
-        
+
         # DB 상태 업데이트 (선택 사항)
         db.execute('UPDATE sync_configs SET is_active = 1 WHERE id = ?', (config_row['id'],))
         db.commit()
-        
-        return render_template('partials/sync_status.html', is_running=True)
+
+        is_running, status = _get_status_context()
+        return render_template('partials/sync_status.html', is_running=is_running, status=status)
     except Exception as e:
         current_app.logger.error(f"Failed to start sync: {e}")
-        return render_template('partials/sync_status.html', is_running=False)
+        is_running, status = _get_status_context(details="동기화 시작 중 오류가 발생했습니다.")
+        return render_template('partials/sync_status.html', is_running=is_running, status=status)
 
 
 @main.route('/filesync/stop', methods=['POST'])
@@ -159,4 +191,5 @@ def stop_sync():
     db.execute('UPDATE sync_configs SET is_active = 0')
     db.commit()
     
-    return render_template('partials/sync_status.html', is_running=False)
+    is_running, status = _get_status_context(details="Sync stopped")
+    return render_template('partials/sync_status.html', is_running=is_running, status=status)

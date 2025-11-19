@@ -1,23 +1,89 @@
 import signal
 import sys
+import os
+import logging
+from pathlib import Path
 from app import create_app
 
+LOG_FILE_ENV = 'FILESYNC_LOG_FILE'
+PID_FILE_ENV = 'FILESYNC_PID_FILE'
+_pid_file_path = None
+
+
+def _configure_logging():
+    log_file = os.environ.get(LOG_FILE_ENV)
+    handlers = []
+    if log_file:
+        try:
+            log_path = Path(log_file)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            handlers.append(logging.FileHandler(log_path, encoding='utf-8'))
+        except OSError:
+            pass
+
+    if sys.stdout and hasattr(sys.stdout, 'write'):
+        handlers.append(logging.StreamHandler(sys.stdout))
+
+    if handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(message)s",
+            handlers=handlers,
+        )
+    else:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(message)s",
+        )
+
+
+_configure_logging()
 app = create_app()
+
+
+def _write_pid_file():
+    global _pid_file_path
+    pid_target = os.environ.get(PID_FILE_ENV)
+    if not pid_target:
+        return
+    pid_path = Path(pid_target)
+    try:
+        pid_path.parent.mkdir(parents=True, exist_ok=True)
+        pid_path.write_text(str(os.getpid()), encoding='utf-8')
+        _pid_file_path = pid_path
+        logging.info("PID file created at %s", pid_path)
+    except OSError as exc:
+        logging.error("Failed to write PID file: %s", exc)
+
+
+def _cleanup_pid_file():
+    global _pid_file_path
+    if _pid_file_path and _pid_file_path.exists():
+        try:
+            _pid_file_path.unlink()
+            logging.info("PID file removed: %s", _pid_file_path)
+        except OSError as exc:
+            logging.warning("Could not remove PID file %s: %s", _pid_file_path, exc)
+    _pid_file_path = None
+
 
 def signal_handler(signum, frame):
     """Signal handler for graceful shutdown"""
-    print("\n서버를 종료합니다...")
+    logging.info("Received signal %s. Shutting down...", signum)
+    _cleanup_pid_file()
     sys.exit(0)
 
+
 if __name__ == '__main__':
-    # 터미널 종료 시그널 처리 등록
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
+    _write_pid_file()
     try:
-        # 백그라운드 리로더와 스레딩 비활성화
+        logging.info("Filesync Web UI starting on port 5120")
         app.run(debug=True, use_reloader=False, threaded=False, port=5120)
     except KeyboardInterrupt:
-        print("\n서버를 종료합니다...")
-        sys.exit(0)
+        logging.info("Keyboard interrupt received. Stopping server.")
+    finally:
+        _cleanup_pid_file()
 

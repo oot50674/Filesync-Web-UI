@@ -15,7 +15,6 @@ Python과 Flask로 구축되었으며, HTMX를 사용하여 페이지 새로고�
 - **자동 재시작**: 서버 재기동 후에도 마지막 실행 상태를 기억하여 사용자가 중지하지 않았다면 자동으로 동기화를 재개합니다.
 - **실시간 상태 모니터링**:
   - 현재 처리 중인 파일, 진행률, 상태(IDLE, SCANNING, COPYING 등)를 실시간으로 표시합니다.
-  - HTMX 폴링을 통해 서버 부하를 최소화하며 UI를 업데이트합니다.
 - **안정화 대기(Settle Time)**: 파일 복사 전 파일 크기/수정 시간이 안정화될 때까지 대기하여 불완전한 복사를 방지합니다.
 - **자동 정리**: 설정된 보존 기간이 지난 백업 파일을 대상 폴더에서 자동으로 삭제합니다.
 
@@ -24,7 +23,6 @@ Python과 Flask로 구축되었으며, HTMX를 사용하여 페이지 새로고�
 - **Backend**: Python 3, Flask
 - **Frontend**: HTML5, HTMX, Alpine.js, Tailwind CSS
 - **Database**: SQLite
-- **Process Management**: Python `threading`을 이용한 백그라운드 동기화 프로세스 관리
 
 ## 🚀 설치 및 실행 방법
 
@@ -104,6 +102,7 @@ Filesync-Web-UI/
 ## 📝 라이선스
 
 이 프로젝트는 MIT 라이선스를 따릅니다.
+
 
 
 

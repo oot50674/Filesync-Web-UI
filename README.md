@@ -66,6 +66,14 @@ python run.py
 
 서버가 시작되면 브라우저에서 `http://127.0.0.1:5120`으로 접속하여 사용할 수 있습니다.
 
+### 5. Windows용 보조 스크립트
+
+루트 디렉터리에 제공된 BAT 파일로 백그라운드 실행과 로그 확인, 종료를 도울 수 있습니다.
+
+- `run_background.bat`: 새 CMD 창에서 `python run.py`를 실행하고 로그를 `logs\filesync.log`에 저장합니다.
+- `tail_logs.bat`: 최신 로그 40줄을 스트리밍합니다. 종료하려면 `Ctrl+C`.
+- `stop_app.bat`: `run_background.bat`로 띄운 창(제목: `FilesyncWebUI`)을 찾아 종료합니다.
+
 ## 📂 프로젝트 구조
 
 ```

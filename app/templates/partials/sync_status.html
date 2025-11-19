@@ -1,0 +1,23 @@
+<div>
+    <h2 class="text-xl font-semibold">Sync Status</h2>
+    <p class="text-gray-600">
+        Current State:
+        <span class="font-bold {% if is_running %}text-green-600{% else %}text-red-600{% endif %}">
+            {{ 'RUNNING' if is_running else 'STOPPED' }}
+        </span>
+    </p>
+</div>
+<div>
+    {% if is_running %}
+    <button hx-post="/filesync/stop" hx-target="#sync-status-section"
+            class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded">
+        Stop Sync
+    </button>
+    {% else %}
+    <button hx-post="/filesync/start" hx-target="#sync-status-section"
+            class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded">
+        Start Sync
+    </button>
+    {% endif %}
+</div>
+

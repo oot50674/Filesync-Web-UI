@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto grid gap-8">
+    <!-- Status Section -->
+    <div id="sync-status-section" class="bg-white p-6 rounded-lg shadow-md flex justify-between items-center"
+         hx-get="/filesync/status" hx-trigger="every 2s">
+        {% include 'partials/sync_status.html' %}
+    </div>
+
+    <!-- Configuration Section -->
+    <div class="bg-white p-6 rounded-lg shadow-md">
+        <h2 class="text-xl font-semibold mb-4 border-b pb-2">Sync Configuration</h2>
+        {% include 'partials/sync_config_form.html' %}
+    </div>
+</div>
+{% endblock %}

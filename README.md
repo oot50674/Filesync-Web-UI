@@ -20,7 +20,7 @@ Python과 Flask로 구축되었으며, HTMX를 사용하여 페이지 새로고�
 ## 🛠 기술 스택
 
 - **Backend**: Python 3, Flask
-- **Frontend**: HTML5, HTMX, Alpine.js, Tailwind CSS (Inline/Utility classes)
+- **Frontend**: HTML5, HTMX, Alpine.js, Tailwind CSS
 - **Database**: SQLite
 - **Process Management**: Python `threading`을 이용한 백그라운드 동기화 프로세스 관리
 

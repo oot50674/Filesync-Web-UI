@@ -1,6 +1,6 @@
-<form hx-post="/filesync/config" hx-swap="outerHTML" class="space-y-4">
+<form hx-post="/filesync/config" hx-target="#sync-card-{{ config.id }}" hx-swap="outerHTML" class="space-y-4">
     <input type="hidden" name="id" value="{{ config.id }}">
-    
+
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
             <label class="block text-sm font-medium text-gray-700">Config Name</label>
@@ -8,28 +8,33 @@
         </div>
         <div>
             <label class="block text-sm font-medium text-gray-700">Pattern</label>
-            <input type="text" name="pattern" value="{{ config.pattern }}" class="mt-1 block w-full border rounded px-3 py-2">
+            <input type="text" name="pattern" value="{{ config.pattern }}"
+                class="mt-1 block w-full border rounded px-3 py-2">
         </div>
     </div>
 
     <div>
         <label class="block text-sm font-medium text-gray-700">Source Path</label>
-        <input type="text" name="source_path" value="{{ config.source_path }}" placeholder="예: /Users/user/Documents" class="mt-1 block w-full border rounded px-3 py-2" required>
+        <input type="text" name="source_path" value="{{ config.source_path }}" placeholder="예: /Users/user/Documents"
+            class="mt-1 block w-full border rounded px-3 py-2" required>
     </div>
 
     <div>
         <label class="block text-sm font-medium text-gray-700">Replica Path</label>
-        <input type="text" name="replica_path" value="{{ config.replica_path }}" placeholder="예: /Users/user/Documents_backup" class="mt-1 block w-full border rounded px-3 py-2" required>
+        <input type="text" name="replica_path" value="{{ config.replica_path }}"
+            placeholder="예: /Users/user/Documents_backup" class="mt-1 block w-full border rounded px-3 py-2" required>
     </div>
 
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
             <label class="block text-sm font-medium text-gray-700">Interval (seconds)</label>
-            <input type="number" name="interval" value="{{ config.interval }}" class="mt-1 block w-full border rounded px-3 py-2">
+            <input type="number" name="interval" value="{{ config.interval }}"
+                class="mt-1 block w-full border rounded px-3 py-2">
         </div>
         <div>
             <label class="block text-sm font-medium text-gray-700">Retention (days)</label>
-            <input type="number" name="retention_days" value="{{ config.retention_days }}" class="mt-1 block w-full border rounded px-3 py-2">
+            <input type="number" name="retention_days" value="{{ config.retention_days }}"
+                class="mt-1 block w-full border rounded px-3 py-2">
         </div>
     </div>
 
@@ -37,21 +42,11 @@
         <button type="submit" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded flex-1">
             Save Configuration
         </button>
-        
-        <button type="button"
-                class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded flex-1"
-                hx-post="/server/shutdown"
-                hx-confirm="서버를 종료하시겠습니까? 실행 중인 모든 작업이 중지됩니다."
-                hx-swap="none"
-                hx-on:htmx:after-request="alert('서버가 종료됩니다.'); setTimeout(() => window.location.reload(), 1000);">
-            🚫 Server Shutdown
-        </button>
     </div>
-    
+
     {% if message %}
     <div class="mt-4 p-3 bg-green-100 text-green-700 rounded text-center">
         {{ message }}
     </div>
     {% endif %}
 </form>
-

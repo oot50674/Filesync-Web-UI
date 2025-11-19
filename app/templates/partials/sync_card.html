@@ -1,0 +1,29 @@
+<div id="sync-card-{{ config.id }}" class="bg-white p-6 rounded-lg shadow-md mb-8">
+    <div class="flex justify-between items-center mb-4 border-b pb-2">
+        <h2 class="text-xl font-semibold">{{ config.name }}</h2>
+        {% if config.id %}
+        <button hx-delete="/filesync/delete/{{ config.id }}" hx-confirm="이 동기화 설정을 삭제하시겠습니까?"
+            hx-target="#sync-card-{{ config.id }}" hx-swap="outerHTML"
+            class="border border-gray-300 text-gray-500 hover:bg-gray-100 hover:text-red-600 font-medium py-1 px-3 rounded text-sm transition duration-200">
+            Delete
+        </button>
+        {% endif %}
+    </div>
+
+    <div class="grid gap-8">
+        <!-- Status Section -->
+        {% if config.id %}
+        <div id="sync-status-section-{{ config.id }}" class="bg-gray-50 p-4 rounded border"
+            hx-get="/filesync/status/{{ config.id }}" hx-trigger="every 2s">
+            {% with config_id=config.id, status=config.status, is_running=config.is_running %}
+            {% include 'partials/sync_status.html' %}
+            {% endwith %}
+        </div>
+        {% endif %}
+
+        <!-- Configuration Section -->
+        <div>
+            {% include 'partials/sync_config_form.html' %}
+        </div>
+    </div>
+</div>

@@ -1,18 +1,31 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="max-w-4xl mx-auto grid gap-8">
-    <!-- Status Section -->
-    <div id="sync-status-section" class="bg-white p-6 rounded-lg shadow-md flex justify-between items-center"
-         hx-get="/filesync/status" hx-trigger="every 2s">
-        {% include 'partials/sync_status.html' %}
+<div class="max-w-4xl mx-auto">
+    <div id="sync-list">
+        {% for config in configs %}
+        {% include 'partials/sync_card.html' %}
+        {% endfor %}
     </div>
 
-    <!-- Configuration Section -->
-    <div class="bg-white p-6 rounded-lg shadow-md">
-        <h2 class="text-xl font-semibold mb-4 border-b pb-2">Sync Configuration</h2>
-        {% include 'partials/sync_config_form.html' %}
+    <div class="text-center mt-8 mb-12">
+        <button hx-get="/filesync/add" hx-target="#sync-list" hx-swap="beforeend"
+            class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-6 rounded-lg shadow transition duration-200 flex items-center justify-center mx-auto gap-2">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd"
+                    d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"
+                    clip-rule="evenodd" />
+            </svg>
+            Add New Sync Task
+        </button>
     </div>
 
+    <div class="border-t pt-8 text-center">
+        <button type="button" class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded"
+            hx-post="/server/shutdown" hx-confirm="서버를 종료하시겠습니까? 실행 중인 모든 작업이 중지됩니다." hx-swap="none"
+            hx-on:htmx:after-request="alert('서버가 종료됩니다.'); setTimeout(() => window.location.reload(), 1000);">
+            🚫 Server Shutdown
+        </button>
+    </div>
 </div>
 {% endblock %}

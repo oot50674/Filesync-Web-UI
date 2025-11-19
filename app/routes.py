@@ -12,11 +12,8 @@ from pathlib import Path
 from app.db import get_db
 from app.filesync import FileSyncManager, SyncConfig
 
-# 전역 동기화 관리자 상태 (간단한 싱글톤 패턴)
-sync_state = {
-    'manager': None,
-    'thread': None
-}
+# 전역 동기화 관리자 상태 (config_id -> {manager, thread})
+sync_managers = {}
 
 DEFAULT_SOURCE_PATH = ''
 DEFAULT_REPLICA_PATH = ''
@@ -33,10 +30,12 @@ def _default_status(details="Sync stopped"):
     }
 
 
-def _get_status_context(details=None):
-    manager = sync_state['manager']
-    if manager:
+def _get_status_context(config_id, details=None):
+    """특정 설정 ID에 대한 상태를 반환합니다."""
+    if config_id in sync_managers:
+        manager = sync_managers[config_id]['manager']
         return manager.running, manager.get_status()
+    
     message = details if details else "Sync stopped"
     return False, _default_status(message)
 
@@ -46,8 +45,13 @@ def _start_sync_manager(config_row, resume=False):
     config_row 정보를 기반으로 FileSyncManager를 기동합니다.
     resume=True일 경우 서버 재기동 후 자동 재시작 상황을 의미합니다.
     """
-    if sync_state['manager'] and sync_state['manager'].running:
-        return True, None
+    config_id = config_row['id']
+    
+    # 이미 실행 중인지 확인
+    if config_id in sync_managers:
+        manager = sync_managers[config_id]['manager']
+        if manager.running:
+            return True, None
 
     db = get_db()
     source_path = config_row['source_path'] or DEFAULT_SOURCE_PATH
@@ -72,20 +76,42 @@ def _start_sync_manager(config_row, resume=False):
         thread = threading.Thread(target=manager.run, daemon=True)
         thread.start()
 
-        sync_state['manager'] = manager
-        sync_state['thread'] = thread
+        sync_managers[config_id] = {
+            'manager': manager,
+            'thread': thread
+        }
 
-        db.execute('UPDATE sync_configs SET is_active = 1 WHERE id = ?', (config_row['id'],))
+        db.execute('UPDATE sync_configs SET is_active = 1 WHERE id = ?', (config_id,))
         db.commit()
 
         if resume:
-            current_app.logger.info("Resumed file sync automatically after restart.")
+            current_app.logger.info(f"Resumed file sync automatically for config {config_id} after restart.")
         return True, None
     except Exception as exc:
-        current_app.logger.error(f"Failed to start sync: {exc}")
-        db.execute('UPDATE sync_configs SET is_active = 0 WHERE id = ?', (config_row['id'],))
+        current_app.logger.error(f"Failed to start sync for config {config_id}: {exc}")
+        db.execute('UPDATE sync_configs SET is_active = 0 WHERE id = ?', (config_id,))
         db.commit()
         return False, str(exc)
+
+
+def _stop_sync_manager(config_id):
+    """특정 설정 ID의 동기화 작업을 중지합니다."""
+    if config_id in sync_managers:
+        entry = sync_managers[config_id]
+        manager = entry['manager']
+        thread = entry['thread']
+        
+        manager.stop()
+        if thread.is_alive():
+            thread.join(timeout=2.0)
+            
+        del sync_managers[config_id]
+        
+        # DB 상태 업데이트
+        db = get_db()
+        db.execute('UPDATE sync_configs SET is_active = 0 WHERE id = ?', (config_id,))
+        db.commit()
+
 
 
 
@@ -100,33 +126,30 @@ def index():
     메인 페이지 - 파일 동기화 설정 및 상태 페이지
     """
     db = get_db()
-    # 첫 번째 설정을 가져오거나 없으면 기본값 사용
-    config_row = db.execute('SELECT * FROM sync_configs ORDER BY id LIMIT 1').fetchone()
-
-    if config_row:
-        config = dict(config_row)
+    # 모든 설정을 가져옴
+    config_rows = db.execute('SELECT * FROM sync_configs ORDER BY id').fetchall()
+    
+    configs = []
+    for row in config_rows:
+        config = dict(row)
         config['source_path'] = config.get('source_path') or DEFAULT_SOURCE_PATH
         config['replica_path'] = config.get('replica_path') or DEFAULT_REPLICA_PATH
-    else:
-        config = {
-            'id': '',
-            'name': 'Default Config',
-            'source_path': DEFAULT_SOURCE_PATH,
-            'replica_path': DEFAULT_REPLICA_PATH,
-            'pattern': '*',
-            'interval': 10,
-            'retention_days': 60
-        }
+        
+        # 각 설정에 대한 현재 상태 주입
+        is_running, status = _get_status_context(config['id'])
+        config['is_running'] = is_running
+        config['status'] = status
+        
+        configs.append(config)
 
-    is_running, status = _get_status_context()
+    # 설정이 하나도 없으면 기본 빈 설정 하나 추가 (UI에서 보여주기 위함)
+    if not configs:
+        configs = []
+
     return render_template(
         'index.html',
-        config=config,
-        is_running=is_running,
-        status=status
+        configs=configs
     )
-
-
 
 
 # --- FileSync 관련 라우트 ---
@@ -135,7 +158,7 @@ def index():
 @main.route('/filesync/config', methods=['POST'])
 def update_sync_config():
     """
-    [HTMX] 설정 저장
+    [HTMX] 설정 저장 (생성 또는 수정)
     """
     db = get_db()
     
@@ -145,106 +168,134 @@ def update_sync_config():
         name = 'Default Config'
     source_path = (request.form.get('source_path') or DEFAULT_SOURCE_PATH).strip()
     replica_path = (request.form.get('replica_path') or DEFAULT_REPLICA_PATH).strip()
-    if not source_path or not replica_path:
-        return render_template(
-            'partials/sync_config_form.html',
-            config={
-                'id': config_id or '',
-                'name': name,
-                'source_path': source_path,
-                'replica_path': replica_path,
-                'pattern': pattern,
-                'interval': interval,
-                'retention_days': retention_days
-            },
-            message="경로를 모두 입력해주세요."
-        )
     pattern = request.form.get('pattern', '*').strip() or '*'
     interval = int(request.form.get('interval', 10))
     retention_days = int(request.form.get('retention_days', 60))
     config_id = request.form.get('id')
     
+    if not source_path or not replica_path:
+        # 유효성 검사 실패 시 폼만 다시 렌더링 (에러 메시지 포함)
+        # config_id가 있으면 기존 값, 없으면 입력값 유지
+        config = {
+            'id': config_id or '',
+            'name': name,
+            'source_path': source_path,
+            'replica_path': replica_path,
+            'pattern': pattern,
+            'interval': interval,
+            'retention_days': retention_days
+        }
+        return render_template(
+            'partials/sync_config_form.html',
+            config=config,
+            message="경로를 모두 입력해주세요."
+        )
+
     if config_id:
         db.execute("""
             UPDATE sync_configs 
             SET name=?, source_path=?, replica_path=?, pattern=?, interval=?, retention_days=?
             WHERE id=?
         """, (name, source_path, replica_path, pattern, interval, retention_days, config_id))
+        new_id = config_id
     else:
-        db.execute("""
+        cursor = db.execute("""
             INSERT INTO sync_configs (name, source_path, replica_path, pattern, interval, retention_days)
             VALUES (?, ?, ?, ?, ?, ?)
         """, (name, source_path, replica_path, pattern, interval, retention_days))
+        new_id = cursor.lastrowid
         
     db.commit()
     
     # 업데이트된 설정 다시 조회
-    config_row = db.execute('SELECT * FROM sync_configs ORDER BY id LIMIT 1').fetchone()
+    config_row = db.execute('SELECT * FROM sync_configs WHERE id = ?', (new_id,)).fetchone()
     config = dict(config_row)
-    config['source_path'] = config.get('source_path') or DEFAULT_SOURCE_PATH
-    config['replica_path'] = config.get('replica_path') or DEFAULT_REPLICA_PATH
     
-    return render_template('partials/sync_config_form.html', config=config, message="설정이 저장되었습니다.")
+    # 상태 정보 주입
+    is_running, status = _get_status_context(config['id'])
+    config['is_running'] = is_running
+    config['status'] = status
+    
+    # 저장 후에는 카드 전체를 다시 렌더링하여 상태창과 폼을 모두 갱신
+    # (새로 생성된 경우 ID가 부여되어야 하므로)
+    return render_template('partials/sync_card.html', config=config)
 
 
-@main.route('/filesync/status')
-def get_sync_status():
+@main.route('/filesync/add', methods=['GET'])
+def add_sync_config():
+    """
+    [HTMX] 새로운 설정 카드 추가
+    """
+    # 빈 설정 객체 생성
+    new_config = {
+        'id': '', # ID가 없으면 신규 생성 모드
+        'name': 'New Config',
+        'source_path': DEFAULT_SOURCE_PATH,
+        'replica_path': DEFAULT_REPLICA_PATH,
+        'pattern': '*',
+        'interval': 10,
+        'retention_days': 60
+    }
+    return render_template('partials/sync_card.html', config=new_config)
+
+
+@main.route('/filesync/delete/<int:config_id>', methods=['DELETE'])
+def delete_sync_config(config_id):
+    """
+    [HTMX] 설정 삭제
+    """
+    # 실행 중이면 중지
+    _stop_sync_manager(config_id)
+    
+    db = get_db()
+    db.execute('DELETE FROM sync_configs WHERE id = ?', (config_id,))
+    db.commit()
+    
+    return ""  # 빈 응답을 보내면 HTMX가 요소를 DOM에서 제거함
+
+
+@main.route('/filesync/status/<int:config_id>')
+def get_sync_status(config_id):
     """
     [HTMX] 동기화 상태 폴링
     """
-    is_running, status = _get_status_context()
-    return render_template('partials/sync_status.html', is_running=is_running, status=status)
+    is_running, status = _get_status_context(config_id)
+    return render_template('partials/sync_status.html', is_running=is_running, status=status, config_id=config_id)
 
 
-@main.route('/filesync/start', methods=['POST'])
-def start_sync():
+@main.route('/filesync/start/<int:config_id>', methods=['POST'])
+def start_sync(config_id):
     """
     [HTMX] 동기화 시작
     """
-    if sync_state['manager'] and sync_state['manager'].running:
-        is_running, status = _get_status_context()
-        return render_template('partials/sync_status.html', is_running=is_running, status=status)
-
     db = get_db()
-    config_row = db.execute('SELECT * FROM sync_configs ORDER BY id LIMIT 1').fetchone()
+    config_row = db.execute('SELECT * FROM sync_configs WHERE id = ?', (config_id,)).fetchone()
     
     if not config_row:
-        # 설정이 없으면 시작 불가
-        is_running, status = _get_status_context(details="동기화 설정이 필요합니다.")
-        return render_template('partials/sync_status.html', is_running=is_running, status=status)
+        is_running, status = _get_status_context(config_id, details="설정을 찾을 수 없습니다.")
+        return render_template('partials/sync_status.html', is_running=is_running, status=status, config_id=config_id)
 
     success, error_message = _start_sync_manager(config_row)
     if not success:
         details = "동기화 시작 중 오류가 발생했습니다."
         if error_message:
             details = f"{details} ({error_message})"
-        is_running, status = _get_status_context(details=details)
-        return render_template('partials/sync_status.html', is_running=is_running, status=status)
+        is_running, status = _get_status_context(config_id, details=details)
+        return render_template('partials/sync_status.html', is_running=is_running, status=status, config_id=config_id)
 
-    is_running, status = _get_status_context()
-    return render_template('partials/sync_status.html', is_running=is_running, status=status)
+    is_running, status = _get_status_context(config_id)
+    return render_template('partials/sync_status.html', is_running=is_running, status=status, config_id=config_id)
 
 
-@main.route('/filesync/stop', methods=['POST'])
-def stop_sync():
+@main.route('/filesync/stop/<int:config_id>', methods=['POST'])
+def stop_sync(config_id):
     """
     [HTMX] 동기화 중지
     """
-    if sync_state['manager']:
-        sync_state['manager'].stop()
-        if sync_state['thread']:
-            sync_state['thread'].join(timeout=2.0)
-            
-    sync_state['manager'] = None
-    sync_state['thread'] = None
+    _stop_sync_manager(config_id)
     
-    # DB 상태 업데이트
-    db = get_db()
-    db.execute('UPDATE sync_configs SET is_active = 0')
-    db.commit()
-    
-    is_running, status = _get_status_context(details="Sync stopped")
-    return render_template('partials/sync_status.html', is_running=is_running, status=status)
+    is_running, status = _get_status_context(config_id, details="Sync stopped")
+    return render_template('partials/sync_status.html', is_running=is_running, status=status, config_id=config_id)
 
 
 @main.route('/server/shutdown', methods=['POST'])
@@ -256,11 +307,9 @@ def shutdown_server():
     import threading
     import time
 
-    # 동기화 작업이 실행 중이면 먼저 중지
-    if sync_state['manager'] and sync_state['manager'].running:
-        sync_state['manager'].stop()
-        if sync_state['thread']:
-            sync_state['thread'].join(timeout=2.0)
+    # 모든 동기화 작업 중지
+    for config_id in list(sync_managers.keys()):
+        _stop_sync_manager(config_id)
 
     # PID 파일 정리
     pid_target = os.environ.get('FILESYNC_PID_FILE')
@@ -287,7 +336,8 @@ def resume_sync_if_needed():
     앱 재기동 후 이전에 실행 중이던 동기화를 자동 재개합니다.
     """
     db = get_db()
-    config_row = db.execute('SELECT * FROM sync_configs WHERE is_active = 1 ORDER BY id LIMIT 1').fetchone()
-    if not config_row:
-        return
-    _start_sync_manager(config_row, resume=True)
+    # 활성화된 모든 설정 조회
+    config_rows = db.execute('SELECT * FROM sync_configs WHERE is_active = 1').fetchall()
+    
+    for row in config_rows:
+        _start_sync_manager(row, resume=True)

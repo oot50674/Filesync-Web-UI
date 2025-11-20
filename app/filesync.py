@@ -49,6 +49,7 @@ class SyncConfig:
         self.source = source
         self.destination = destination
         self.pattern = pattern
+        self.patterns = parse_patterns(pattern)
         self.retention_days = retention_days
         self.scan_interval = scan_interval
         self.settle_seconds = settle_seconds
@@ -76,7 +77,7 @@ def save_sync_history(history_path: Path, history: Dict[str, str]) -> None:
     try:
         history_path.parent.mkdir(parents=True, exist_ok=True)
         with history_path.open("w", encoding="utf-8") as fp:
-            json.dump(history, fp, indent=2)
+            json.dump(history, fp, indent=2, ensure_ascii=False)
     except Exception:
         logging.exception("Failed to persist sync history: %s", history_path)
 
@@ -86,6 +87,24 @@ def build_history_key(root: Path, file_path: Path) -> str:
         return file_path.relative_to(root).as_posix()
     except ValueError:
         return file_path.name
+
+
+def parse_patterns(pattern_value: str) -> list[str]:
+    """콤마(,) 구분 패턴 문자열을 리스트로 변환."""
+    if not pattern_value:
+        return [DEFAULT_PATTERN]
+    parts = [part.strip() for part in pattern_value.split(",")]
+    patterns = [part for part in parts if part]
+    return patterns or [DEFAULT_PATTERN]
+
+
+def matches_patterns(file_name: str, patterns: list[str]) -> bool:
+    """대소문자를 무시하고 파일명이 패턴 목록 중 하나와 일치하는지 확인."""
+    lowered_name = file_name.casefold()
+    for pattern in patterns:
+        if fnmatch.fnmatch(lowered_name, pattern.casefold()):
+            return True
+    return False
 
 
 def parse_args() -> SyncConfig:
@@ -109,7 +128,7 @@ def parse_args() -> SyncConfig:
     parser.add_argument(
         "--pattern",
         default=DEFAULT_PATTERN,
-        help="파일명을 거를 글롭 패턴 (기본값: %(default)s).",
+        help="콤마(,)로 구분된 글롭 패턴 목록 (예: *.bak,*.zip).",
     )
     parser.add_argument(
         "--retention-days",
@@ -153,22 +172,25 @@ def validate_paths(source: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
 
 
-def snapshot_matching_files(source: Path, pattern: str) -> Dict[Path, float]:
+def snapshot_matching_files(source: Path, patterns: list[str]) -> Dict[Path, float]:
     matches: Dict[Path, float] = {}
     if not source.exists():
         return matches
-    for file_path in source.rglob(pattern):
-        if file_path.is_file():
-            matches[file_path] = file_path.stat().st_mtime
+    for file_path in source.rglob("*"):
+        if not file_path.is_file():
+            continue
+        if not matches_patterns(file_path.name, patterns):
+            continue
+        matches[file_path] = file_path.stat().st_mtime
     return matches
 
 
 def detect_new_files(
     source: Path,
-    pattern: str,
+    patterns: list[str],
     known_files: Dict[Path, float],
 ) -> list[Path]:
-    current_snapshot = snapshot_matching_files(source, pattern)
+    current_snapshot = snapshot_matching_files(source, patterns)
     new_files: list[Path] = []
     for file_path, mtime in current_snapshot.items():
         if file_path not in known_files:
@@ -434,7 +456,7 @@ def copy_backup(
 def enforce_retention(
     destination: Path,
     retention_days: int,
-    pattern: str,
+    patterns: list[str],
     sync_history: Dict[str, str],
 ) -> bool:
     """
@@ -444,7 +466,7 @@ def enforce_retention(
     Args:
         destination (Path): 백업 파일 루트.
         retention_days (int): 보존 일수. 0 이하이면 미적용.
-        pattern (str): 삭제 대상 파일 패턴.
+        patterns (list[str]): 삭제 대상 파일 패턴 목록.
         sync_history (Dict[str, str]): 파일별 마지막 동기화 기록.
 
     Returns:
@@ -468,7 +490,7 @@ def enforce_retention(
             relative_parts = file_path.relative_to(destination).parts
             if relative_parts and relative_parts[0] == HISTORY_DIR_NAME:
                 continue
-            if not fnmatch.fnmatch(file_path.name, pattern):
+            if not matches_patterns(file_path.name, patterns):
                 continue
 
             history_key = build_history_key(destination, file_path)
@@ -501,7 +523,7 @@ def enforce_retention(
     return history_changed
 
 
-def get_existing_backups(destination: Path, pattern: str) -> Dict[str, int]:
+def get_existing_backups(destination: Path, patterns: list[str]) -> Dict[str, int]:
     existing: Dict[str, int] = {}
     if not destination.exists():
         return existing
@@ -514,7 +536,7 @@ def get_existing_backups(destination: Path, pattern: str) -> Dict[str, int]:
             continue
         if relative_parts and relative_parts[0] == HISTORY_DIR_NAME:
             continue
-        if not fnmatch.fnmatch(file_path.name, pattern):
+        if not matches_patterns(file_path.name, patterns):
             continue
         existing[file_path.name] = file_path.stat().st_size
     return existing
@@ -665,7 +687,7 @@ class FileSyncManager:
                         history_changed = enforce_retention(
                             self.config.destination,
                             self.config.retention_days,
-                            self.config.pattern,
+                            self.config.patterns,
                             self.sync_history
                         )
                         if history_changed:
@@ -702,10 +724,10 @@ class FileSyncManager:
         validate_paths(self.config.source, self.config.destination)
 
         # 초기 스냅샷
-        known_files = snapshot_matching_files(self.config.source, self.config.pattern)
+        known_files = snapshot_matching_files(self.config.source, self.config.patterns)
         existing_backups = get_existing_backups(
             self.config.destination,
-            self.config.pattern
+            self.config.patterns
         )
 
         # 초기 파일들을 모두 Pending 상태로 등록 (즉시 복사가 아니라 안정화 체크를 거치도록 함)
@@ -741,7 +763,7 @@ class FileSyncManager:
         try:
             while self.running:
                 # 1. 새로운 파일 스캔
-                new_detected = detect_new_files(self.config.source, self.config.pattern, known_files)
+                new_detected = detect_new_files(self.config.source, self.config.patterns, known_files)
                 if new_detected:
                     now = time.time()
                     for file_path in new_detected:

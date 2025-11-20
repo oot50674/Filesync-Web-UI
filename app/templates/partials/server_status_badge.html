@@ -12,7 +12,7 @@
 <div id="system-status-badge"
     class="px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-2 border transition-colors duration-200 {{ tone_classes.get(status.tone, tone_classes['ready']) }}"
     hx-get="/server/status"
-    hx-trigger="load, every 5s"
+    hx-trigger="every 5s"
     hx-swap="outerHTML">
     <div class="w-2 h-2 rounded-full animate-pulse {{ dot_classes.get(status.tone, dot_classes['ready']) }}"></div>
     <span class="tracking-tight">{{ status.state }}</span>

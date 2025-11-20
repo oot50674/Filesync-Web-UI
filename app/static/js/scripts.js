@@ -140,7 +140,6 @@ window.syncStatusPanel = (options) => {
         details: '',
         currentFile: '',
         progressPercent: 0,
-        lastSyncTime: '',
         updatedAt: '',
         busy: false,
 
@@ -171,8 +170,21 @@ window.syncStatusPanel = (options) => {
             this.currentFile = payload.current_file || '';
             const percent = Number(payload.progress_percent);
             this.progressPercent = Number.isFinite(percent) ? Math.min(100, Math.max(0, percent)) : 0;
-            this.lastSyncTime = payload.last_sync_time || '';
-            this.updatedAt = payload.updated_at || '';
+
+            const format = (str) => {
+                if (!str) return '';
+                const d = new Date(str.endsWith('Z') || str.includes('+') ? str : str + 'Z');
+                const now = new Date();
+                const isToday = d.toDateString() === now.toDateString();
+                const time = d.toLocaleTimeString('ko-KR', { hour12: false });
+                if (isToday) return time;
+                const year = d.getFullYear();
+                const month = String(d.getMonth() + 1).padStart(2, '0');
+                const day = String(d.getDate()).padStart(2, '0');
+                return `${year}-${month}-${day} ${time}`;
+            };
+
+            this.updatedAt = format(payload.updated_at);
         },
 
         startSync() {

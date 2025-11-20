@@ -40,6 +40,36 @@ def _get_status_context(config_id, details=None):
     return False, _default_status(message)
 
 
+def _build_system_status():
+    """헤더에 노출할 전체 시스템 상태 정보를 계산합니다."""
+    active_count = sum(
+        1 for entry in sync_managers.values() if entry['manager'].running
+    )
+    total_configs = len(sync_managers)
+
+    if active_count > 0:
+        state = "ONLINE"
+        tone = "online"
+        detail = f"{active_count}개 작업 실행 중"
+    elif total_configs > 0:
+        state = "IDLE"
+        tone = "idle"
+        detail = "모든 작업 대기 중"
+    else:
+        state = "READY"
+        tone = "ready"
+        detail = "등록된 작업 없음"
+
+    return {
+        'state': state,
+        'tone': tone,
+        'detail': detail,
+        'active_count': active_count,
+        'total_configs': total_configs,
+        'checked_at': datetime.utcnow().strftime("%H:%M:%S"),
+    }
+
+
 def _start_sync_manager(config_row, resume=False):
     """
     config_row 정보를 기반으로 FileSyncManager를 기동합니다.
@@ -328,6 +358,15 @@ def shutdown_server():
     threading.Thread(target=delayed_shutdown, daemon=True).start()
 
     return "Server shutting down..."
+
+
+@main.route('/server/status')
+def server_status():
+    """
+    [HTMX] 헤더 상태 뱃지를 위한 시스템 상태 엔드포인트
+    """
+    status = _build_system_status()
+    return render_template('partials/server_status_badge.html', status=status)
 
 
 @main.before_app_request

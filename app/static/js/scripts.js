@@ -1,4 +1,4 @@
-// FileSync JS helpers (modernized with ES6+ syntax)
+// FileSync JS helpers
 (() => {
     const doc = window.document || {};
     const htmlEl = doc.documentElement || {};

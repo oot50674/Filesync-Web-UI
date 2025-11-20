@@ -12,6 +12,12 @@ SUPPRESSED_STATUS_PATHS = (
 socketio = SocketIO(async_mode='threading')
 
 
+SUPPRESSED_STATUS_PATHS = (
+    "/filesync/status",
+    "/server/status",
+)
+
+
 class StatusPollingFilter(logging.Filter):
     """HTMX 상태 폴링 라우트 로그를 숨기기 위한 필터"""
 
@@ -62,8 +68,5 @@ def create_app():
     # 불필요한 상태 폴링 로그(werkzeug) 필터링
     werkzeug_logger = logging.getLogger("werkzeug")
     _ensure_status_filter(werkzeug_logger)
-
-    # SocketIO 초기화
-    socketio.init_app(app, async_mode='threading')
 
     return app

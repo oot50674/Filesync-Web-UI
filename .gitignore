@@ -1,6 +1,6 @@
 /.venv
 /venv
 /database.db
-/AGENTS.md/
+/AGENTS.md
 **/__pycache__/
 /logs/

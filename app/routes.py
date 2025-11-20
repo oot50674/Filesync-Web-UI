@@ -4,11 +4,12 @@ Flask 라우트 정의 모듈
 이 모듈은 애플리케이션의 모든 HTTP 라우트를 정의합니다.
 HTMX를 사용한 부분 렌더링과 서버 사이드 렌더링을 결합한 하이브리드 방식으로 구현되어 있습니다.
 """
-from flask import Blueprint, render_template, request, current_app
+from flask import Blueprint, render_template, request, current_app, jsonify
 from datetime import datetime
 import threading
 import logging
 from pathlib import Path
+from app import socketio
 from app.db import get_db
 from app.filesync import FileSyncManager, SyncConfig
 
@@ -17,6 +18,7 @@ sync_managers = {}
 
 DEFAULT_SOURCE_PATH = ''
 DEFAULT_REPLICA_PATH = ''
+logger = logging.getLogger(__name__)
 
 
 def _default_status(details="Sync stopped"):
@@ -38,6 +40,58 @@ def _get_status_context(config_id, details=None):
     
     message = details if details else "Sync stopped"
     return False, _default_status(message)
+
+
+def _status_payload(config_id, is_running, status):
+    return {
+        "config_id": config_id,
+        "is_running": is_running,
+        "status": status,
+    }
+
+
+def _status_response(config_id, is_running, status):
+    wants_json = request.accept_mimetypes["application/json"] >= request.accept_mimetypes["text/html"]
+    if wants_json:
+        return jsonify(_status_payload(config_id, is_running, status))
+    return render_template("partials/sync_status.html", is_running=is_running, status=status, config_id=config_id)
+
+
+def _build_system_status():
+    """헤더에 노출할 전체 시스템 상태 정보를 계산합니다."""
+    active_count = sum(
+        1 for entry in sync_managers.values() if entry['manager'].running
+    )
+    total_configs = len(sync_managers)
+
+    if active_count > 0:
+        state = "ONLINE"
+        tone = "online"
+        detail = f"{active_count}개 작업 실행 중"
+    elif total_configs > 0:
+        state = "IDLE"
+        tone = "idle"
+        detail = "모든 작업 대기 중"
+    else:
+        state = "READY"
+        tone = "ready"
+        detail = "등록된 작업 없음"
+
+    return {
+        'state': state,
+        'tone': tone,
+        'detail': detail,
+        'active_count': active_count,
+        'total_configs': total_configs,
+        'checked_at': datetime.utcnow().strftime("%H:%M:%S"),
+    }
+
+
+def _emit_status_event(config_id, is_running, status):
+    try:
+        socketio.emit("sync_update", _status_payload(config_id, is_running, status))
+    except Exception:
+        logger.exception("Failed to emit sync_update for config %s", config_id)
 
 
 def _start_sync_manager(config_row, resume=False):
@@ -72,7 +126,15 @@ def _start_sync_manager(config_row, resume=False):
                 format="%(asctime)s - %(levelname)s - %(message)s",
             )
 
-        manager = FileSyncManager(sync_config)
+        manager_holder = {}
+
+        def status_callback(status):
+            manager_instance = manager_holder.get('manager')
+            is_running = bool(manager_instance and manager_instance.running)
+            _emit_status_event(config_id, is_running, status or {})
+
+        manager = FileSyncManager(sync_config, status_callback=status_callback)
+        manager_holder['manager'] = manager
         thread = threading.Thread(target=manager.run, daemon=True)
         thread.start()
 
@@ -102,6 +164,7 @@ def _stop_sync_manager(config_id):
         thread = entry['thread']
         
         manager.stop()
+        _emit_status_event(config_id, False, manager.get_status())
         if thread.is_alive():
             thread.join(timeout=2.0)
             
@@ -191,7 +254,13 @@ def update_sync_config():
             message="경로를 모두 입력해주세요."
         )
 
+    was_running = False
     if config_id:
+        config_id = int(config_id)
+        if config_id in sync_managers:
+            manager_entry = sync_managers[config_id]
+            manager = manager_entry['manager']
+            was_running = manager.running
         db.execute("""
             UPDATE sync_configs 
             SET name=?, source_path=?, replica_path=?, pattern=?, interval=?, retention_days=?
@@ -210,9 +279,19 @@ def update_sync_config():
     # 업데이트된 설정 다시 조회
     config_row = db.execute('SELECT * FROM sync_configs WHERE id = ?', (new_id,)).fetchone()
     config = dict(config_row)
+
+    restart_error = None
+    if was_running:
+        _stop_sync_manager(new_id)
+        restarted, error_message = _start_sync_manager(config_row)
+        if not restarted:
+            restart_error = error_message or "재시작 실패"
+            current_app.logger.error(f"Config {new_id} 재시작 실패: {restart_error}")
     
     # 상태 정보 주입
     is_running, status = _get_status_context(config['id'])
+    if restart_error:
+        status['details'] = f"설정 저장 후 재시작 실패: {restart_error}"
     config['is_running'] = is_running
     config['status'] = status
     
@@ -260,7 +339,16 @@ def get_sync_status(config_id):
     [HTMX] 동기화 상태 폴링
     """
     is_running, status = _get_status_context(config_id)
-    return render_template('partials/sync_status.html', is_running=is_running, status=status, config_id=config_id)
+    return _status_response(config_id, is_running, status)
+
+
+@main.route('/filesync/status/<int:config_id>.json')
+def get_sync_status_json(config_id):
+    """
+    JSON 형식의 동기화 상태 반환 (Alpine 폴링용)
+    """
+    is_running, status = _get_status_context(config_id)
+    return jsonify(_status_payload(config_id, is_running, status))
 
 
 @main.route('/filesync/start/<int:config_id>', methods=['POST'])
@@ -273,7 +361,7 @@ def start_sync(config_id):
     
     if not config_row:
         is_running, status = _get_status_context(config_id, details="설정을 찾을 수 없습니다.")
-        return render_template('partials/sync_status.html', is_running=is_running, status=status, config_id=config_id)
+        return _status_response(config_id, is_running, status)
 
     success, error_message = _start_sync_manager(config_row)
     if not success:
@@ -284,7 +372,7 @@ def start_sync(config_id):
         return render_template('partials/sync_status.html', is_running=is_running, status=status, config_id=config_id)
 
     is_running, status = _get_status_context(config_id)
-    return render_template('partials/sync_status.html', is_running=is_running, status=status, config_id=config_id)
+    return _status_response(config_id, is_running, status)
 
 
 @main.route('/filesync/stop/<int:config_id>', methods=['POST'])
@@ -295,7 +383,7 @@ def stop_sync(config_id):
     _stop_sync_manager(config_id)
     
     is_running, status = _get_status_context(config_id, details="Sync stopped")
-    return render_template('partials/sync_status.html', is_running=is_running, status=status, config_id=config_id)
+    return _status_response(config_id, is_running, status)
 
 
 @main.route('/server/shutdown', methods=['POST'])
@@ -328,6 +416,62 @@ def shutdown_server():
     threading.Thread(target=delayed_shutdown, daemon=True).start()
 
     return "Server shutting down..."
+
+
+@main.route('/server/restart', methods=['POST'])
+def restart_server():
+    """
+    [HTMX] 서버 재시작
+    """
+    import os
+    import threading
+    import time
+    import sys
+
+    # 모든 동기화 작업 중지
+    for config_id in list(sync_managers.keys()):
+        _stop_sync_manager(config_id)
+
+    # PID 파일 정리 (선택적)
+    pid_target = os.environ.get('FILESYNC_PID_FILE')
+    if pid_target and os.path.exists(pid_target):
+        try:
+            os.unlink(pid_target)
+            current_app.logger.info("PID file removed: %s", pid_target)
+        except OSError:
+            pass
+
+    # 서버 재시작: 동일한 파이썬 인터프리터로 현재 프로세스를 exec
+    def delayed_restart():
+        time.sleep(0.5)
+        try:
+            python = sys.executable
+            os.execv(python, [python] + sys.argv)
+        except Exception:
+            current_app.logger.exception("Failed to execv for restart; exiting instead.")
+            os._exit(0)
+
+    threading.Thread(target=delayed_restart, daemon=True).start()
+
+    return "Server restarting..."
+
+
+@main.route('/server/status')
+def server_status():
+    """
+    [HTMX] 헤더 상태 뱃지를 위한 시스템 상태 엔드포인트
+    """
+    status = _build_system_status()
+    return render_template('partials/server_status_badge.html', status=status)
+
+
+@main.route('/server/status.json')
+def server_status_json():
+    """
+    JSON 형식의 시스템 상태 엔드포인트 (Alpine.js 폴링용)
+    """
+    status = _build_system_status()
+    return jsonify(status)
 
 
 @main.before_app_request

@@ -3,7 +3,7 @@ import sys
 import os
 import logging
 from pathlib import Path
-from app import create_app
+from app import create_app, socketio
 
 LOG_FILE_ENV = 'FILESYNC_LOG_FILE'
 PID_FILE_ENV = 'FILESYNC_PID_FILE'
@@ -91,7 +91,7 @@ if __name__ == '__main__':
     _write_pid_file()
     try:
         logging.info("Filesync Web UI starting on port 5120")
-        app.run(debug=True, use_reloader=False, threaded=False, port=5120)
+        socketio.run(app, debug=True, use_reloader=False, port=5120)
     except KeyboardInterrupt:
         logging.info("Keyboard interrupt received. Stopping server.")
     finally:

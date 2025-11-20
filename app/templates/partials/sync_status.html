@@ -1,50 +1,49 @@
-<div class="flex justify-between items-start">
-    <div>
-        <h2 class="text-xl font-semibold">Sync Status</h2>
-        <p class="text-gray-600">
+<div
+    class="flex flex-wrap justify-between items-start gap-4"
+    x-data='syncStatusPanel({
+        configId: {{ config_id }},
+        initialStatus: {{ status | tojson | safe }},
+        initialRunning: {{ "true" if is_running else "false" }}
+    })'
+    x-init="init()"
+    x-cloak
+>
+    <div class="sync-status-info flex-1 min-w-0">
+        <h2 class="text-xl font-semibold sync-status-title">Sync Status</h2>
+        <p class="text-gray-600 sync-status-state-row">
             Current State:
-            <span class="font-bold {% if is_running %}text-green-600{% else %}text-red-600{% endif %}">
-                {{ status.state if status.state else ('RUNNING' if is_running else 'STOPPED') }}
-            </span>
+            <span class="font-bold" :class="isRunning ? 'text-green-600' : 'text-red-600'" x-text="stateLabel"></span>
         </p>
-        <p class="text-sm text-gray-500 mt-1">
-            {{ status.details }}
-        </p>
-        {% if status.current_file %}
-        <div class="mt-3"
-            x-data="{ progress: {{ status.progress_percent if status.progress_percent is not none else 0 }} }">
-            <p class="text-sm text-gray-700">
-                Processing: <span class="font-medium">{{ status.current_file }}</span>
-            </p>
-            <div class="w-64 bg-gray-200 rounded-full h-2 mt-2" role="progressbar" aria-valuemin="0" aria-valuemax="100"
-                :aria-valuenow="progress">
-                <div class="h-2 rounded-full bg-blue-500" :style="'width: ' + progress + '%'" role="presentation"></div>
+
+        <p class="text-sm text-gray-500 mt-1 sync-status-details" x-show="details" x-text="details"></p>
+
+        <div class="mt-3 sync-status-progress" x-show="progressVisible">
+            <div class="w-full bg-gray-200 rounded-full h-2 mt-2 sync-status-progressbar-bg" role="progressbar"
+                aria-valuemin="0" aria-valuemax="100" :aria-valuenow="progressPercent">
+                <div class="h-2 rounded-full bg-blue-500 sync-status-progressbar-fill" :style="`width: ${progressPercent}%`"
+                    role="presentation"></div>
             </div>
-            <p class="text-xs text-gray-500 mt-1" x-text="progress + '% complete'">
-                {{ status.progress_percent }}% complete
-            </p>
+            <p class="text-xs text-gray-500 mt-1 sync-status-progress-label" x-text="progressLabel"></p>
         </div>
-        {% endif %}
-        {% if status.last_sync_time %}
-        <p class="text-xs text-gray-400 mt-2">
-            Last sync at {{ status.last_sync_time }}
-        </p>
-        {% endif %}
-        <p class="text-xs text-gray-400 mt-1">
-            Updated {{ status.updated_at }}
-        </p>
+
+        <p class="text-xs text-gray-400 mt-2 sync-status-last-time" x-show="lastSyncTime" x-text="`Last sync at ${lastSyncTime}`"></p>
+        <p class="text-xs text-gray-400 mt-1 sync-status-updated" x-show="updatedAt" x-text="`Updated ${updatedAt}`"></p>
     </div>
-    <div>
-        {% if is_running %}
-        <button hx-post="/filesync/stop/{{ config_id }}" hx-target="#sync-status-section-{{ config_id }}"
-            class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded">
+
+    <div class="sync-status-actions flex-shrink-0 flex flex-col gap-2">
+        <button
+            x-show="isRunning"
+            @click.prevent="stopSync"
+            :disabled="busy"
+            class="bg-red-500 hover:bg-red-600 disabled:opacity-60 text-white font-bold py-2 px-4 rounded sync-status-btn stop-btn">
             Stop Sync
         </button>
-        {% else %}
-        <button hx-post="/filesync/start/{{ config_id }}" hx-target="#sync-status-section-{{ config_id }}"
-            class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded">
+        <button
+            x-show="!isRunning"
+            @click.prevent="startSync"
+            :disabled="busy"
+            class="bg-green-500 hover:bg-green-600 disabled:opacity-60 text-white font-bold py-2 px-4 rounded sync-status-btn start-btn">
             Start Sync
         </button>
-        {% endif %}
     </div>
 </div>

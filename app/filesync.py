@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import json
 import logging
 import shutil
 import sys
@@ -11,13 +12,23 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Optional
+from app.utils import (
+    format_size,
+    parse_patterns,
+    matches_patterns,
+    build_history_key,
+    history_file_path,
+    load_sync_history,
+    save_sync_history,
+)
 
 DEFAULT_PATTERN = "*"
 DEFAULT_RETENTION_DAYS = 60
 DEFAULT_SCAN_INTERVAL = 10
 DEFAULT_SETTLE_SECONDS = 10
 COPY_CHUNK_SIZE = 8 * 1024 * 1024
-PROGRESS_LOG_STEP = 0.01
+HISTORY_DIR_NAME = ".history"
+HISTORY_FILE_NAME = "sync_history.json"
 
 
 @dataclass
@@ -46,6 +57,7 @@ class SyncConfig:
         self.source = source
         self.destination = destination
         self.pattern = pattern
+        self.patterns = parse_patterns(pattern)
         self.retention_days = retention_days
         self.scan_interval = scan_interval
         self.settle_seconds = settle_seconds
@@ -73,7 +85,7 @@ def parse_args() -> SyncConfig:
     parser.add_argument(
         "--pattern",
         default=DEFAULT_PATTERN,
-        help="파일명을 거를 글롭 패턴 (기본값: %(default)s).",
+        help="콤마(,)로 구분된 글롭 패턴 목록 (예: *.bak,*.zip).",
     )
     parser.add_argument(
         "--retention-days",
@@ -117,22 +129,25 @@ def validate_paths(source: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
 
 
-def snapshot_matching_files(source: Path, pattern: str) -> Dict[Path, float]:
+def snapshot_matching_files(source: Path, patterns: list[str]) -> Dict[Path, float]:
     matches: Dict[Path, float] = {}
     if not source.exists():
         return matches
-    for file_path in source.rglob(pattern):
-        if file_path.is_file():
-            matches[file_path] = file_path.stat().st_mtime
+    for file_path in source.rglob("*"):
+        if not file_path.is_file():
+            continue
+        if not matches_patterns(file_path.name, patterns):
+            continue
+        matches[file_path] = file_path.stat().st_mtime
     return matches
 
 
 def detect_new_files(
     source: Path,
-    pattern: str,
+    patterns: list[str],
     known_files: Dict[Path, float],
 ) -> list[Path]:
-    current_snapshot = snapshot_matching_files(source, pattern)
+    current_snapshot = snapshot_matching_files(source, patterns)
     new_files: list[Path] = []
     for file_path, mtime in current_snapshot.items():
         if file_path not in known_files:
@@ -193,72 +208,6 @@ def build_destination_path(
     return target_path
 
 
-def format_size(num_bytes: float) -> str:
-    units = ["B", "KB", "MB", "GB", "TB"]
-    value = float(num_bytes)
-    for unit in units:
-        if value < 1024 or unit == units[-1]:
-            return f"{value:.1f} {unit}"
-        value /= 1024
-    return f"{value:.1f} {units[-1]}"
-
-
-def progress_bar(percent: int, width: int = 20) -> str:
-    filled = int(width * percent / 100)
-    bar = '█' * filled + ' ' * (width - filled)
-    return f"[{bar}] {percent}%"
-
-
-_PROGRESS_LINE_LENGTH = 0
-
-
-def _get_log_stream():
-    logger = logging.getLogger()
-    if logger.handlers:
-        handler = logger.handlers[0]
-        stream = getattr(handler, "stream", None)
-        if stream is not None:
-            return stream
-    return sys.stderr
-
-
-_PROGRESS_LOGGER = logging.getLogger("backup_watcher_progress")
-
-
-def _log_progress_message(message: str) -> None:
-    if not _PROGRESS_LOGGER.handlers:
-        handler = logging.StreamHandler(sys.stderr)
-        handler.setFormatter(logging.Formatter("%(message)s"))
-        _PROGRESS_LOGGER.addHandler(handler)
-        _PROGRESS_LOGGER.propagate = False
-    _PROGRESS_LOGGER.info(message)
-
-
-def _update_progress_line(message: str, finalize: bool = False) -> None:
-    global _PROGRESS_LINE_LENGTH
-    stream = _get_log_stream()
-    clean_message = message.rstrip("\n")
-    if stream is None:
-        _log_progress_message(clean_message)
-        if finalize:
-            _PROGRESS_LINE_LENGTH = 0
-        return
-    is_tty = getattr(stream, "isatty", lambda: False)()
-    if not is_tty:
-        _log_progress_message(clean_message)
-        if finalize:
-            _PROGRESS_LINE_LENGTH = 0
-        return
-    padded = clean_message.ljust(max(len(clean_message), _PROGRESS_LINE_LENGTH))
-    stream.write("\r" + padded)
-    if finalize:
-        stream.write("\n")
-        _PROGRESS_LINE_LENGTH = 0
-    else:
-        _PROGRESS_LINE_LENGTH = len(clean_message)
-    stream.flush()
-
-
 def copy_file_with_progress(
     source_file: Path,
     destination_path: Path,
@@ -267,18 +216,11 @@ def copy_file_with_progress(
 ) -> None:
     total_size = source_file.stat().st_size
     copied = 0
-    next_log_threshold = PROGRESS_LOG_STEP
-    total_size_str = format_size(total_size)
-    progress_finished = False
-
     def _should_cancel() -> bool:
         return cancel_event is not None and cancel_event.is_set()
 
     if progress_callback:
         progress_callback(source_file.name, copied, total_size)
-    _update_progress_line(
-        f"Copying {source_file.name}: {progress_bar(0)} (0.0 B / {total_size_str})"
-    )
     try:
         with source_file.open("rb") as src, destination_path.open("wb") as dst:
             while True:
@@ -293,46 +235,14 @@ def copy_file_with_progress(
                     raise CopyCancelled(f"Copy cancelled: {source_file}")
                 if progress_callback:
                     progress_callback(source_file.name, copied, total_size)
-                if total_size:
-                    progress = copied / total_size
-                    should_log = False
-                    if copied == total_size:
-                        should_log = True
-                    elif progress >= next_log_threshold:
-                        should_log = True
-                        while next_log_threshold <= progress:
-                            next_log_threshold += PROGRESS_LOG_STEP
-                    if should_log:
-                        percent = min(int(progress * 100), 100)
-                        progress_finished = copied == total_size
-                        _update_progress_line(
-                            f"Copying {source_file.name}: {progress_bar(percent)} ({format_size(copied)} / {total_size_str})",
-                            finalize=progress_finished,
-                        )
-                else:
-                    _update_progress_line(
-                        f"Copying {source_file.name}: {format_size(copied)} copied"
-                    )
     except CopyCancelled:
-        _update_progress_line(
-            f"Copying {source_file.name}: cancelled",
-            finalize=True,
-        )
         raise
     except Exception:
         # 에러 발생 시(중단 포함) 파일 핸들이 닫힌 후 불완전한 파일 삭제 시도
         # 여기서 삭제하지 않으면 0바이트 또는 잘린 파일이 남아 Lock의 원인이 될 수 있음
         # 하지만 open 컨텍스트 매니저가 닫힌 후에 처리해야 함
         raise 
-    
-    if not total_size:
-        _update_progress_line(
-            f"Copying {source_file.name}: {progress_bar(100)} (0.0 B / 0.0 B)",
-            finalize=True,
-        )
-        progress_finished = True
-    if not progress_finished:
-        _update_progress_line("", finalize=True)
+
     if progress_callback:
         progress_callback(source_file.name, total_size, total_size)
 
@@ -395,56 +305,96 @@ def copy_backup(
     return None
 
 
-def enforce_retention(destination: Path, retention_days: int, pattern: str) -> None:
+def enforce_retention(
+    destination: Path,
+    retention_days: int,
+    patterns: list[str],
+    sync_history: Dict[str, str],
+) -> bool:
     """
-    Retention 정책에 따라 destination 경로 내에서 pattern에 맞는 파일 중 
-    retention_days를 초과한 오래된 파일을 삭제합니다.
+    동기화 기록 기준으로 보존 기간을 초과한 파일을 삭제하고,
+    연관된 히스토리 엔트리를 정리합니다.
 
     Args:
-        destination (Path): 백업 파일들이 위치한 루트 폴더.
-        retention_days (int): 보존 일수. 0 이하일 경우 retention 적용하지 않음.
-        pattern (str): 삭제대상 파일 이름 패턴(fnmatch 패턴).
+        destination (Path): 백업 파일 루트.
+        retention_days (int): 보존 일수. 0 이하이면 미적용.
+        patterns (list[str]): 삭제 대상 파일 패턴 목록.
+        sync_history (Dict[str, str]): 파일별 마지막 동기화 기록.
+
+    Returns:
+        bool: 히스토리가 수정되었는지 여부.
     """
     if retention_days <= 0:
-        # 보존일이 0 이하이면 retention policy를 적용하지 않음
-        return
-    threshold = datetime.now() - timedelta(days=retention_days)  # 삭제 임계점 시간 계산
-    deleted = 0  # 삭제된 파일 개수 카운터
-    base_path = destination
-    if not base_path.exists():
-        # 목적지 폴더가 존재하지 않으면 아무것도 하지 않음
-        return
-    for file_path in base_path.rglob("*"):  # 하위 모든 파일과 폴더 순회
+        return False
+
+    if not destination.exists():
+        return False
+
+    threshold = datetime.utcnow() - timedelta(days=retention_days)
+    deleted = 0
+    history_changed = False
+    history_keys_to_remove: set[str] = set()
+
+    for file_path in destination.rglob("*"):
         try:
             if not file_path.is_file():
-                # 디렉토리 등 파일이 아니면 건너뜀
                 continue
-            if not fnmatch.fnmatch(file_path.name, pattern):
-                # 패턴에 일치하지 않으면 건너뜀
+            relative_parts = file_path.relative_to(destination).parts
+            if relative_parts and relative_parts[0] == HISTORY_DIR_NAME:
                 continue
-            
-            modified = datetime.fromtimestamp(file_path.stat().st_mtime)  # 마지막 수정시간
-            if modified < threshold:
-                # 임계점 이전(즉, retention 기간을 초과함!)이면 삭제
+            if not matches_patterns(file_path.name, patterns):
+                continue
+
+            history_key = build_history_key(destination, file_path)
+            synced_at_str = sync_history.get(history_key)
+            synced_at: Optional[datetime] = None
+            if synced_at_str:
+                try:
+                    synced_at = datetime.fromisoformat(synced_at_str)
+                except ValueError:
+                    logging.warning("Invalid sync history timestamp for %s", history_key)
+
+            if synced_at is None:
+                synced_at = datetime.fromtimestamp(file_path.stat().st_mtime)
+
+            if synced_at < threshold:
                 file_path.unlink()
                 deleted += 1
+                history_keys_to_remove.add(history_key)
                 logging.info("Removed expired backup: %s", file_path)
         except Exception:
             logging.exception("Failed to evaluate retention for %s", file_path)
+
+    for key in history_keys_to_remove:
+        if sync_history.pop(key, None) is not None:
+            history_changed = True
+
     if deleted:
         logging.info("Retention cleanup removed %s file(s).", deleted)
 
+    return history_changed
 
-def get_existing_backups(destination: Path, pattern: str) -> Dict[str, int]:
+
+def get_existing_backups(destination: Path, patterns: list[str]) -> Dict[str, int]:
     existing: Dict[str, int] = {}
     if not destination.exists():
         return existing
     for file_path in destination.rglob("*"): # iterdir -> rglob for recursive check
         if not file_path.is_file():
             continue
-        if not fnmatch.fnmatch(file_path.name, pattern):
+        try:
+            relative_parts = file_path.relative_to(destination).parts
+        except ValueError:
             continue
-        existing[file_path.name] = file_path.stat().st_size
+        if relative_parts and relative_parts[0] == HISTORY_DIR_NAME:
+            continue
+        if not matches_patterns(file_path.name, patterns):
+            continue
+        try:
+            rel_key = file_path.relative_to(destination).as_posix()
+        except ValueError:
+            rel_key = file_path.name
+        existing[rel_key] = file_path.stat().st_size
     return existing
 
 
@@ -456,7 +406,7 @@ def remove_destination_file(destination: Path, file_name: str) -> None:
 
 
 class FileSyncManager:
-    def __init__(self, config: SyncConfig):
+    def __init__(self, config: SyncConfig, status_callback=None):
         self.config = config
         self.running = False
         self._stop_event = threading.Event()
@@ -471,32 +421,93 @@ class FileSyncManager:
         }
         # 변경점: 대기 중인 파일들을 관리할 딕셔너리
         self.pending_files: Dict[Path, PendingFile] = {}
+        self.history_path = history_file_path(self.config.destination)
+        self.sync_history: Dict[str, str] = load_sync_history(self.history_path)
+        self._queue_total_bytes = 0
+        self._queue_completed_bytes = 0
+        self._status_callback = status_callback
 
-    def _update_status(self, **kwargs) -> None:
+    def _reset_queue_progress(self) -> None:
+        self._queue_total_bytes = 0
+        self._queue_completed_bytes = 0
+        self._update_status(progress_percent=0)
+
+    def _add_queue_bytes(self, size: int) -> None:
+        if size <= 0:
+            return
+        self._queue_total_bytes += size
+
+    def _remove_queue_bytes(self, size: int) -> None:
+        if size <= 0:
+            return
+        self._queue_total_bytes = max(0, self._queue_total_bytes - size)
+        if self._queue_completed_bytes > self._queue_total_bytes:
+            self._queue_completed_bytes = self._queue_total_bytes
+
+    def _calculate_overall_percent(self, current_copied: int = 0) -> int:
+        total_bytes = self._queue_total_bytes
+        if total_bytes <= 0:
+            return 0
+        completed_bytes = self._queue_completed_bytes + max(0, current_copied)
+        percent = int((float(completed_bytes) / float(total_bytes)) * 100)
+        if percent > 100:
+            return 100
+        return percent
+
+    def _mark_queue_active(self, details: str = "") -> None:
+        status = self.get_status()
+        state = status.get("state", "")
+        if state in ("IDLE", "STOPPED"):
+            self._update_status(
+                state="SCANNING",
+                details=details or "Pending files detected",
+                current_file=status.get("current_file", ""),
+                progress_percent=self._calculate_overall_percent(),
+            )
+
+    def _notify_status(self, status_snapshot: Dict[str, str]) -> None:
+        if not self._status_callback:
+            return
+        try:
+            self._status_callback(status_snapshot)
+        except Exception:
+            logging.exception("Status callback failed.")
+
+    def _update_status(self, notify: bool = True, **kwargs) -> None:
+        status_snapshot: Dict[str, str] = {}
         with self._status_lock:
             self._status.update(kwargs)
             self._status["updated_at"] = datetime.utcnow().isoformat()
+            status_snapshot = dict(self._status)
+        if notify:
+            self._notify_status(status_snapshot)
 
     def _progress_callback(self, filename: str, copied: int, total: int) -> None:
         # (기존 코드와 동일)
-        percent = 0
-        if total:
-            percent = int((float(copied) / float(total)) * 100)
         detail = f"Copying {filename}"
         if total:
             detail = (
                 f"{filename}: {format_size(copied)} / {format_size(total)}"
             )
+        overall_percent = self._calculate_overall_percent(copied)
         self._update_status(
             state="COPYING",
             current_file=filename,
-            progress_percent=min(percent, 100),
+            progress_percent=overall_percent,
             details=detail,
         )
 
     def get_status(self) -> Dict[str, str]:
         with self._status_lock:
             return dict(self._status)
+
+    def _persist_history(self) -> None:
+        save_sync_history(self.history_path, self.sync_history)
+
+    def _record_sync(self, destination_path: Path) -> None:
+        key = build_history_key(self.config.destination, destination_path)
+        self.sync_history[key] = datetime.utcnow().isoformat()
+        self._persist_history()
 
     def _process_pending_files(self, existing_backups: Dict[str, int]):
         """대기열에 있는 파일들의 안정화 여부를 확인하고 복사 수행"""
@@ -516,6 +527,7 @@ class FileSyncManager:
                 # 파일이 삭제된 경우 처리
                 if not file_path.exists():
                     logging.warning(f"File disappeared pending copy: {file_path}")
+                    self._remove_queue_bytes(info.last_size)
                     processed_paths.append(file_path)
                     continue
 
@@ -525,6 +537,12 @@ class FileSyncManager:
 
                 # 파일 상태가 변했는지 확인
                 if current_size != info.last_size or current_mtime != info.last_mtime:
+                    if current_size != info.last_size:
+                        size_delta = current_size - info.last_size
+                        if size_delta > 0:
+                            self._add_queue_bytes(size_delta)
+                        else:
+                            self._remove_queue_bytes(-size_delta)
                     # 변했다면 정보 갱신하고 타이머 리셋
                     info.last_size = current_size
                     info.last_mtime = current_mtime
@@ -535,26 +553,20 @@ class FileSyncManager:
                 # 안정화 시간 충족 여부 확인
                 elapsed = now - info.stable_since
                 if elapsed >= self.config.settle_seconds:
-                    
-                    # [NEW] Retention 기간 체크: 이미 오래된 파일이면 복사 스킵
-                    if self.config.retention_days > 0:
-                        threshold = datetime.now() - timedelta(days=self.config.retention_days)
-                        file_mod_time = datetime.fromtimestamp(current_mtime)
-                        if file_mod_time < threshold:
-                            logging.info(f"Skipping old file (exceeds retention): {file_path.name}")
-                            processed_paths.append(file_path)
-                            continue
-
                     # 복사 로직 시작
                     logging.info(f"대기열 - 파일 안정화 완료: {file_path.name} ({format_size(current_size)}), 대기시간: {elapsed:.1f}s, 복사 시작")
 
-                    file_key = file_path.name
+                    try:
+                        file_key = file_path.relative_to(self.config.source).as_posix()
+                    except ValueError:
+                        file_key = file_path.name
                     dest_size = existing_backups.get(file_key)
                     overwrite = False
 
                     if dest_size is not None:
                         if dest_size == current_size:
                             # 이미 완료된 파일이면 스킵
+                            self._remove_queue_bytes(current_size)
                             processed_paths.append(file_path)
                             continue
                         # 크기가 다르면 덮어쓰기
@@ -564,7 +576,8 @@ class FileSyncManager:
                     self._update_status(
                         state="COPYING",
                         current_file=file_path.name,
-                        details=f"Starting copy for {file_path.name}"
+                        details=f"Starting copy for {file_path.name}",
+                        progress_percent=self._calculate_overall_percent()
                     )
 
                     try:
@@ -578,27 +591,39 @@ class FileSyncManager:
                         )
                     except CopyCancelled:
                         logging.info(f"Copy operation cancelled for {file_path.name}")
+                        self._remove_queue_bytes(info.last_size)
                         processed_paths.append(file_path)
                         break
 
                     if copied_path:
                         existing_backups[file_key] = current_size
+                        self._record_sync(copied_path)
+                        self._queue_completed_bytes += current_size
+                        overall_percent = self._calculate_overall_percent()
                         self._update_status(
-                            state="IDLE",
+                            state="COPYING",
+                            current_file="",
                             details=f"Synced: {file_path.name}",
-                            last_sync_time=datetime.utcnow().isoformat()
+                            last_sync_time=datetime.utcnow().isoformat(),
+                            progress_percent=overall_percent
                         )
                         # 보존 정책 적용
-                        enforce_retention(
+                        history_changed = enforce_retention(
                             self.config.destination,
                             self.config.retention_days,
-                            self.config.pattern
+                            self.config.patterns,
+                            self.sync_history
                         )
+                        if history_changed:
+                            self._persist_history()
+                    else:
+                        self._remove_queue_bytes(current_size)
 
                     processed_paths.append(file_path)
 
             except Exception:
                 logging.exception(f"Error processing pending file: {file_path}")
+                self._remove_queue_bytes(info.last_size)
                 processed_paths.append(file_path)
 
         # 처리된 파일 대기열에서 제거
@@ -609,8 +634,12 @@ class FileSyncManager:
             logging.info(f"대기열 정리 완료: {len(processed_paths)}개 파일 처리됨, 남은 대기 파일: {len(self.pending_files)}개")
             
         if not self.pending_files and self.running:
-             self._update_status(
+            if self._queue_total_bytes and self._queue_completed_bytes < self._queue_total_bytes:
+                self._queue_completed_bytes = self._queue_total_bytes
+            self._update_status(
                 state="IDLE",
+                current_file="",
+                progress_percent=self._calculate_overall_percent(),
                 details="Monitoring for changes..."
             )
 
@@ -626,10 +655,10 @@ class FileSyncManager:
         validate_paths(self.config.source, self.config.destination)
 
         # 초기 스냅샷
-        known_files = snapshot_matching_files(self.config.source, self.config.pattern)
+        known_files = snapshot_matching_files(self.config.source, self.config.patterns)
         existing_backups = get_existing_backups(
             self.config.destination,
-            self.config.pattern
+            self.config.patterns
         )
 
         # 초기 파일들을 모두 Pending 상태로 등록 (즉시 복사가 아니라 안정화 체크를 거치도록 함)
@@ -637,7 +666,10 @@ class FileSyncManager:
 
         for file_path, mtime in known_files.items():
             # 이미 백업이 있고 크기도 같다면 스킵
-            file_key = file_path.name
+            try:
+                file_key = file_path.relative_to(self.config.source).as_posix()
+            except ValueError:
+                file_key = file_path.name
             if file_key in existing_backups:
                 if file_path.stat().st_size == existing_backups[file_key]:
                     continue
@@ -645,12 +677,16 @@ class FileSyncManager:
             # 새로 발견된 것으로 간주하고 등록
             try:
                 stat = file_path.stat()
+                if not self.pending_files:
+                    self._reset_queue_progress()
                 self.pending_files[file_path] = PendingFile(
                     path=file_path,
                     last_size=stat.st_size,
                     last_mtime=stat.st_mtime,
                     stable_since=now
                 )
+                self._add_queue_bytes(stat.st_size)
+                self._mark_queue_active(f"{file_path.name} 대기열 등록")
                 logging.info(f"대기열 등록 - 초기 파일: {file_path.name} ({format_size(stat.st_size)}), 총 대기 파일: {len(self.pending_files)}개")
             except FileNotFoundError:
                 continue
@@ -665,19 +701,23 @@ class FileSyncManager:
         try:
             while self.running:
                 # 1. 새로운 파일 스캔
-                new_detected = detect_new_files(self.config.source, self.config.pattern, known_files)
+                new_detected = detect_new_files(self.config.source, self.config.patterns, known_files)
                 if new_detected:
                     now = time.time()
                     for file_path in new_detected:
                         if file_path not in self.pending_files:
                             try:
                                 stat = file_path.stat()
+                                if not self.pending_files:
+                                    self._reset_queue_progress()
                                 self.pending_files[file_path] = PendingFile(
                                     path=file_path,
                                     last_size=stat.st_size,
                                     last_mtime=stat.st_mtime,
                                     stable_since=now
                                 )
+                                self._add_queue_bytes(stat.st_size)
+                                self._mark_queue_active(f"{file_path.name} 대기열 등록")
                                 logging.info(f"대기열 등록 - 새 파일 감지: {file_path.name} ({format_size(stat.st_size)}), 총 대기 파일: {len(self.pending_files)}개")
                             except FileNotFoundError:
                                 pass

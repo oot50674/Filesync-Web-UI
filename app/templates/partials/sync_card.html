@@ -13,8 +13,7 @@
     <div class="grid gap-8">
         <!-- Status Section -->
         {% if config.id %}
-        <div id="sync-status-section-{{ config.id }}" class="bg-gray-50 p-4 rounded border"
-            hx-get="/filesync/status/{{ config.id }}" hx-trigger="every 2s">
+        <div id="sync-status-section-{{ config.id }}" class="bg-gray-50 p-4 rounded border">
             {% with config_id=config.id, status=config.status, is_running=config.is_running %}
             {% include 'partials/sync_status.html' %}
             {% endwith %}

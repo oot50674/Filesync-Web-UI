@@ -1,0 +1,14 @@
+<div
+    id="system-status-badge"
+    x-data="statusBadge()"
+    x-init="start()"
+    class="px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-2 border transition-colors duration-200"
+    role="status"
+>
+    <div :class="dotClass" class="w-2 h-2 rounded-full animate-pulse" data-role="dot"></div>
+    <div class="flex items-center gap-3 leading-tight">
+        <span class="tracking-tight font-semibold" x-text="state" data-role="state">...</span>
+        <span class="text-[11px] font-normal opacity-80" x-text="detail" data-role="detail"></span>
+    </div>
+</div>
+

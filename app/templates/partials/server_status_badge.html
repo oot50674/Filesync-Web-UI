@@ -1,21 +1,14 @@
-{% set tone_classes = {
-    'online': 'bg-emerald-900/30 text-emerald-100 border-emerald-500/50',
-    'idle': 'bg-amber-900/30 text-amber-100 border-amber-500/40',
-    'ready': 'bg-slate-800 text-slate-200 border-slate-500/60'
-} %}
-{% set dot_classes = {
-    'online': 'bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.7)]',
-    'idle': 'bg-amber-300 shadow-[0_0_8px_rgba(251,191,36,0.6)]',
-    'ready': 'bg-slate-300'
-} %}
-
-<div id="system-status-badge"
-    class="px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-2 border transition-colors duration-200 {{ tone_classes.get(status.tone, tone_classes['ready']) }}"
-    hx-get="/server/status"
-    hx-trigger="every 5s"
-    hx-swap="outerHTML">
-    <div class="w-2 h-2 rounded-full animate-pulse {{ dot_classes.get(status.tone, dot_classes['ready']) }}"></div>
-    <span class="tracking-tight">{{ status.state }}</span>
-    <span class="text-[11px] font-normal opacity-80">{{ status.detail }}</span>
+<div
+    id="system-status-badge"
+    x-data="statusBadge()"
+    x-init="start()"
+    class="px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-2 border transition-colors duration-200"
+    role="status"
+>
+    <div :class="dotClass" class="w-2 h-2 rounded-full animate-pulse" data-role="dot"></div>
+    <div class="flex items-center gap-3 leading-tight">
+        <span class="tracking-tight font-semibold" x-text="state" data-role="state">...</span>
+        <span class="text-[11px] font-normal opacity-80" x-text="detail" data-role="detail"></span>
+    </div>
 </div>
 

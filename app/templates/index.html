@@ -20,7 +20,12 @@
         </button>
     </div>
 
-    <div class="border-t pt-8 text-center">
+    <div class="border-t pt-8 text-center flex items-center justify-center gap-4">
+        <button type="button" class="bg-amber-500 hover:bg-amber-600 text-white font-bold py-2 px-4 rounded"
+            hx-post="/server/restart" hx-confirm="서버를 재시작하시겠습니까? 실행 중인 작업이 잠깐 중단됩니다." hx-swap="none"
+            hx-on:htmx:after-request="alert('서버가 재시작됩니다. 잠시 기다려주세요.'); setTimeout(() => window.location.reload(), 1500);">
+            🔁 Server Restart
+        </button>
         <button type="button" class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded"
             hx-post="/server/shutdown" hx-confirm="서버를 종료하시겠습니까? 실행 중인 모든 작업이 중지됩니다." hx-swap="none"
             hx-on:htmx:after-request="alert('서버가 종료됩니다.'); setTimeout(() => window.location.reload(), 1000);">

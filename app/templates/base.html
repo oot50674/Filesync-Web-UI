@@ -9,6 +9,9 @@
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
 
+    <!-- HTMX CSS Styles -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    
     <!-- HTMX: 서버와의 HTML 조각 교환을 담당 -->
     <script src="https://unpkg.com/htmx.org@1.9.10"
         integrity="sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5xLSi8nO7UC"
@@ -16,22 +19,7 @@
 
     <!-- Alpine.js: 클라이언트 사이드 인터랙션 담당 -->
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.3/dist/cdn.min.js"></script>
-
-    <style>
-        /* HTMX 로딩 인디케이터 스타일 */
-        .htmx-indicator {
-            opacity: 0;
-            transition: opacity 200ms ease-in;
-        }
-
-        .htmx-request .htmx-indicator {
-            opacity: 1;
-        }
-
-        .htmx-request.htmx-indicator {
-            opacity: 1;
-        }
-    </style>
+    <script src="{{ url_for('static', filename='js/scripts.js') }}"></script>
 </head>
 
 <body class="bg-gray-100 min-h-screen font-sans">
@@ -73,6 +61,6 @@
             &copy; 2025 FileSync Web UI.
         </footer>
     </div>
-</body>1
+</body>
 
 </html>

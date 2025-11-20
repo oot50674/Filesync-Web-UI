@@ -4,7 +4,7 @@ Flask 라우트 정의 모듈
 이 모듈은 애플리케이션의 모든 HTTP 라우트를 정의합니다.
 HTMX를 사용한 부분 렌더링과 서버 사이드 렌더링을 결합한 하이브리드 방식으로 구현되어 있습니다.
 """
-from flask import Blueprint, render_template, request, current_app
+from flask import Blueprint, render_template, request, current_app, jsonify
 from datetime import datetime
 import threading
 import logging
@@ -38,6 +38,21 @@ def _get_status_context(config_id, details=None):
     
     message = details if details else "Sync stopped"
     return False, _default_status(message)
+
+
+def _status_payload(config_id, is_running, status):
+    return {
+        "config_id": config_id,
+        "is_running": is_running,
+        "status": status,
+    }
+
+
+def _status_response(config_id, is_running, status):
+    wants_json = request.accept_mimetypes["application/json"] >= request.accept_mimetypes["text/html"]
+    if wants_json:
+        return jsonify(_status_payload(config_id, is_running, status))
+    return render_template("partials/sync_status.html", is_running=is_running, status=status, config_id=config_id)
 
 
 def _build_system_status():
@@ -290,7 +305,16 @@ def get_sync_status(config_id):
     [HTMX] 동기화 상태 폴링
     """
     is_running, status = _get_status_context(config_id)
-    return render_template('partials/sync_status.html', is_running=is_running, status=status, config_id=config_id)
+    return _status_response(config_id, is_running, status)
+
+
+@main.route('/filesync/status/<int:config_id>.json')
+def get_sync_status_json(config_id):
+    """
+    JSON 형식의 동기화 상태 반환 (Alpine 폴링용)
+    """
+    is_running, status = _get_status_context(config_id)
+    return jsonify(_status_payload(config_id, is_running, status))
 
 
 @main.route('/filesync/start/<int:config_id>', methods=['POST'])
@@ -303,7 +327,7 @@ def start_sync(config_id):
     
     if not config_row:
         is_running, status = _get_status_context(config_id, details="설정을 찾을 수 없습니다.")
-        return render_template('partials/sync_status.html', is_running=is_running, status=status, config_id=config_id)
+        return _status_response(config_id, is_running, status)
 
     success, error_message = _start_sync_manager(config_row)
     if not success:
@@ -314,7 +338,7 @@ def start_sync(config_id):
         return render_template('partials/sync_status.html', is_running=is_running, status=status, config_id=config_id)
 
     is_running, status = _get_status_context(config_id)
-    return render_template('partials/sync_status.html', is_running=is_running, status=status, config_id=config_id)
+    return _status_response(config_id, is_running, status)
 
 
 @main.route('/filesync/stop/<int:config_id>', methods=['POST'])
@@ -325,7 +349,7 @@ def stop_sync(config_id):
     _stop_sync_manager(config_id)
     
     is_running, status = _get_status_context(config_id, details="Sync stopped")
-    return render_template('partials/sync_status.html', is_running=is_running, status=status, config_id=config_id)
+    return _status_response(config_id, is_running, status)
 
 
 @main.route('/server/shutdown', methods=['POST'])
@@ -360,6 +384,44 @@ def shutdown_server():
     return "Server shutting down..."
 
 
+@main.route('/server/restart', methods=['POST'])
+def restart_server():
+    """
+    [HTMX] 서버 재시작
+    """
+    import os
+    import threading
+    import time
+    import sys
+
+    # 모든 동기화 작업 중지
+    for config_id in list(sync_managers.keys()):
+        _stop_sync_manager(config_id)
+
+    # PID 파일 정리 (선택적)
+    pid_target = os.environ.get('FILESYNC_PID_FILE')
+    if pid_target and os.path.exists(pid_target):
+        try:
+            os.unlink(pid_target)
+            current_app.logger.info("PID file removed: %s", pid_target)
+        except OSError:
+            pass
+
+    # 서버 재시작: 동일한 파이썬 인터프리터로 현재 프로세스를 exec
+    def delayed_restart():
+        time.sleep(0.5)
+        try:
+            python = sys.executable
+            os.execv(python, [python] + sys.argv)
+        except Exception:
+            current_app.logger.exception("Failed to execv for restart; exiting instead.")
+            os._exit(0)
+
+    threading.Thread(target=delayed_restart, daemon=True).start()
+
+    return "Server restarting..."
+
+
 @main.route('/server/status')
 def server_status():
     """
@@ -367,6 +429,15 @@ def server_status():
     """
     status = _build_system_status()
     return render_template('partials/server_status_badge.html', status=status)
+
+
+@main.route('/server/status.json')
+def server_status_json():
+    """
+    JSON 형식의 시스템 상태 엔드포인트 (Alpine.js 폴링용)
+    """
+    status = _build_system_status()
+    return jsonify(status)
 
 
 @main.before_app_request

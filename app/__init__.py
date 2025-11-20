@@ -4,7 +4,7 @@ import logging
 
 
 class StatusPollingFilter(logging.Filter):
-    """HTMX 상태 폴링 라우트(GET /filesync/status) 로그를 숨기기 위한 필터"""
+    """HTMX 상태 폴링 라우트 로그를 숨기기 위한 필터"""
 
     def filter(self, record):
         message = record.getMessage()

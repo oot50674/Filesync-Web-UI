@@ -1,48 +1,50 @@
-<div class="flex justify-between items-start">
-    <div>
-        <h2 class="text-xl font-semibold">Sync Status</h2>
-        <p class="text-gray-600">
+<div class="flex flex-wrap justify-between items-start gap-4">
+    <div class="sync-status-info flex-1 min-w-0">
+        <h2 class="text-xl font-semibold sync-status-title">Sync Status</h2>
+        <p class="text-gray-600 sync-status-state-row">
             Current State:
-            <span class="font-bold {% if is_running %}text-green-600{% else %}text-red-600{% endif %}">
+            <span class="font-bold sync-status-state {% if is_running %}text-green-600{% else %}text-red-600{% endif %}">
                 {{ status.state if status.state else ('RUNNING' if is_running else 'STOPPED') }}
             </span>
         </p>
-        <p class="text-sm text-gray-500 mt-1">
+        {% if status.details and not status.current_file %}
+        <p class="text-sm text-gray-500 mt-1 sync-status-details">
             {{ status.details }}
         </p>
+        {% endif %}
         {% if status.current_file %}
-        <div class="mt-3"
+        <div class="mt-3 sync-status-progress"
             x-data="{ progress: {{ status.progress_percent if status.progress_percent is not none else 0 }} }">
-            <p class="text-sm text-gray-700">
-                Processing: <span class="font-medium">{{ status.current_file }}</span>
+            <p class="text-sm text-gray-700 sync-status-processing">
+                Processing: <span class="font-medium sync-status-file">{{ status.current_file }}</span>
             </p>
-            <div class="w-64 bg-gray-200 rounded-full h-2 mt-2" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+            <div class="w-64 bg-gray-200 rounded-full h-2 mt-2 sync-status-progressbar-bg" role="progressbar" aria-valuemin="0" aria-valuemax="100"
                 :aria-valuenow="progress">
-                <div class="h-2 rounded-full bg-blue-500" :style="'width: ' + progress + '%'" role="presentation"></div>
+                <div class="h-2 rounded-full bg-blue-500 sync-status-progressbar-fill" :style="'width: ' + progress + '%'" role="presentation"></div>
             </div>
-            <p class="text-xs text-gray-500 mt-1" x-text="progress + '% complete'">
+            <p class="text-xs text-gray-500 mt-1 sync-status-progress-label" x-text="progress + '% complete'">
                 {{ status.progress_percent }}% complete
             </p>
         </div>
         {% endif %}
         {% if status.last_sync_time %}
-        <p class="text-xs text-gray-400 mt-2">
+        <p class="text-xs text-gray-400 mt-2 sync-status-last-time">
             Last sync at {{ status.last_sync_time }}
         </p>
         {% endif %}
-        <p class="text-xs text-gray-400 mt-1">
+        <p class="text-xs text-gray-400 mt-1 sync-status-updated">
             Updated {{ status.updated_at }}
         </p>
     </div>
-    <div>
+    <div class="sync-status-actions flex-shrink-0">
         {% if is_running %}
         <button hx-post="/filesync/stop/{{ config_id }}" hx-target="#sync-status-section-{{ config_id }}"
-            class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded">
+            class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded sync-status-btn stop-btn">
             Stop Sync
         </button>
         {% else %}
         <button hx-post="/filesync/start/{{ config_id }}" hx-target="#sync-status-section-{{ config_id }}"
-            class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded">
+            class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded sync-status-btn start-btn">
             Start Sync
         </button>
         {% endif %}

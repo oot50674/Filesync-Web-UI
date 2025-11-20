@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import json
 import logging
 import shutil
 import sys
@@ -18,6 +19,8 @@ DEFAULT_SCAN_INTERVAL = 10
 DEFAULT_SETTLE_SECONDS = 10
 COPY_CHUNK_SIZE = 8 * 1024 * 1024
 PROGRESS_LOG_STEP = 0.01
+HISTORY_DIR_NAME = ".history"
+HISTORY_FILE_NAME = "sync_history.json"
 
 
 @dataclass
@@ -50,6 +53,39 @@ class SyncConfig:
         self.scan_interval = scan_interval
         self.settle_seconds = settle_seconds
         self.log_level = log_level
+
+
+def history_file_path(destination: Path) -> Path:
+    return destination / HISTORY_DIR_NAME / HISTORY_FILE_NAME
+
+
+def load_sync_history(history_path: Path) -> Dict[str, str]:
+    if not history_path.exists():
+        return {}
+    try:
+        with history_path.open("r", encoding="utf-8") as fp:
+            data = json.load(fp)
+        if isinstance(data, dict):
+            return {str(key): str(value) for key, value in data.items()}
+    except Exception:
+        logging.exception("Failed to load sync history: %s", history_path)
+    return {}
+
+
+def save_sync_history(history_path: Path, history: Dict[str, str]) -> None:
+    try:
+        history_path.parent.mkdir(parents=True, exist_ok=True)
+        with history_path.open("w", encoding="utf-8") as fp:
+            json.dump(history, fp, indent=2)
+    except Exception:
+        logging.exception("Failed to persist sync history: %s", history_path)
+
+
+def build_history_key(root: Path, file_path: Path) -> str:
+    try:
+        return file_path.relative_to(root).as_posix()
+    except ValueError:
+        return file_path.name
 
 
 def parse_args() -> SyncConfig:
@@ -395,44 +431,74 @@ def copy_backup(
     return None
 
 
-def enforce_retention(destination: Path, retention_days: int, pattern: str) -> None:
+def enforce_retention(
+    destination: Path,
+    retention_days: int,
+    pattern: str,
+    sync_history: Dict[str, str],
+) -> bool:
     """
-    Retention 정책에 따라 destination 경로 내에서 pattern에 맞는 파일 중 
-    retention_days를 초과한 오래된 파일을 삭제합니다.
+    동기화 기록 기준으로 보존 기간을 초과한 파일을 삭제하고,
+    연관된 히스토리 엔트리를 정리합니다.
 
     Args:
-        destination (Path): 백업 파일들이 위치한 루트 폴더.
-        retention_days (int): 보존 일수. 0 이하일 경우 retention 적용하지 않음.
-        pattern (str): 삭제대상 파일 이름 패턴(fnmatch 패턴).
+        destination (Path): 백업 파일 루트.
+        retention_days (int): 보존 일수. 0 이하이면 미적용.
+        pattern (str): 삭제 대상 파일 패턴.
+        sync_history (Dict[str, str]): 파일별 마지막 동기화 기록.
+
+    Returns:
+        bool: 히스토리가 수정되었는지 여부.
     """
     if retention_days <= 0:
-        # 보존일이 0 이하이면 retention policy를 적용하지 않음
-        return
-    threshold = datetime.now() - timedelta(days=retention_days)  # 삭제 임계점 시간 계산
-    deleted = 0  # 삭제된 파일 개수 카운터
-    base_path = destination
-    if not base_path.exists():
-        # 목적지 폴더가 존재하지 않으면 아무것도 하지 않음
-        return
-    for file_path in base_path.rglob("*"):  # 하위 모든 파일과 폴더 순회
+        return False
+
+    if not destination.exists():
+        return False
+
+    threshold = datetime.utcnow() - timedelta(days=retention_days)
+    deleted = 0
+    history_changed = False
+    history_keys_to_remove: set[str] = set()
+
+    for file_path in destination.rglob("*"):
         try:
             if not file_path.is_file():
-                # 디렉토리 등 파일이 아니면 건너뜀
+                continue
+            relative_parts = file_path.relative_to(destination).parts
+            if relative_parts and relative_parts[0] == HISTORY_DIR_NAME:
                 continue
             if not fnmatch.fnmatch(file_path.name, pattern):
-                # 패턴에 일치하지 않으면 건너뜀
                 continue
-            
-            modified = datetime.fromtimestamp(file_path.stat().st_mtime)  # 마지막 수정시간
-            if modified < threshold:
-                # 임계점 이전(즉, retention 기간을 초과함!)이면 삭제
+
+            history_key = build_history_key(destination, file_path)
+            synced_at_str = sync_history.get(history_key)
+            synced_at: Optional[datetime] = None
+            if synced_at_str:
+                try:
+                    synced_at = datetime.fromisoformat(synced_at_str)
+                except ValueError:
+                    logging.warning("Invalid sync history timestamp for %s", history_key)
+
+            if synced_at is None:
+                synced_at = datetime.fromtimestamp(file_path.stat().st_mtime)
+
+            if synced_at < threshold:
                 file_path.unlink()
                 deleted += 1
+                history_keys_to_remove.add(history_key)
                 logging.info("Removed expired backup: %s", file_path)
         except Exception:
             logging.exception("Failed to evaluate retention for %s", file_path)
+
+    for key in history_keys_to_remove:
+        if sync_history.pop(key, None) is not None:
+            history_changed = True
+
     if deleted:
         logging.info("Retention cleanup removed %s file(s).", deleted)
+
+    return history_changed
 
 
 def get_existing_backups(destination: Path, pattern: str) -> Dict[str, int]:
@@ -441,6 +507,12 @@ def get_existing_backups(destination: Path, pattern: str) -> Dict[str, int]:
         return existing
     for file_path in destination.rglob("*"): # iterdir -> rglob for recursive check
         if not file_path.is_file():
+            continue
+        try:
+            relative_parts = file_path.relative_to(destination).parts
+        except ValueError:
+            continue
+        if relative_parts and relative_parts[0] == HISTORY_DIR_NAME:
             continue
         if not fnmatch.fnmatch(file_path.name, pattern):
             continue
@@ -471,6 +543,8 @@ class FileSyncManager:
         }
         # 변경점: 대기 중인 파일들을 관리할 딕셔너리
         self.pending_files: Dict[Path, PendingFile] = {}
+        self.history_path = history_file_path(self.config.destination)
+        self.sync_history: Dict[str, str] = load_sync_history(self.history_path)
 
     def _update_status(self, **kwargs) -> None:
         with self._status_lock:
@@ -497,6 +571,14 @@ class FileSyncManager:
     def get_status(self) -> Dict[str, str]:
         with self._status_lock:
             return dict(self._status)
+
+    def _persist_history(self) -> None:
+        save_sync_history(self.history_path, self.sync_history)
+
+    def _record_sync(self, destination_path: Path) -> None:
+        key = build_history_key(self.config.destination, destination_path)
+        self.sync_history[key] = datetime.utcnow().isoformat()
+        self._persist_history()
 
     def _process_pending_files(self, existing_backups: Dict[str, int]):
         """대기열에 있는 파일들의 안정화 여부를 확인하고 복사 수행"""
@@ -535,16 +617,6 @@ class FileSyncManager:
                 # 안정화 시간 충족 여부 확인
                 elapsed = now - info.stable_since
                 if elapsed >= self.config.settle_seconds:
-                    
-                    # [NEW] Retention 기간 체크: 이미 오래된 파일이면 복사 스킵
-                    if self.config.retention_days > 0:
-                        threshold = datetime.now() - timedelta(days=self.config.retention_days)
-                        file_mod_time = datetime.fromtimestamp(current_mtime)
-                        if file_mod_time < threshold:
-                            logging.info(f"Skipping old file (exceeds retention): {file_path.name}")
-                            processed_paths.append(file_path)
-                            continue
-
                     # 복사 로직 시작
                     logging.info(f"대기열 - 파일 안정화 완료: {file_path.name} ({format_size(current_size)}), 대기시간: {elapsed:.1f}s, 복사 시작")
 
@@ -583,17 +655,21 @@ class FileSyncManager:
 
                     if copied_path:
                         existing_backups[file_key] = current_size
+                        self._record_sync(copied_path)
                         self._update_status(
                             state="IDLE",
                             details=f"Synced: {file_path.name}",
                             last_sync_time=datetime.utcnow().isoformat()
                         )
                         # 보존 정책 적용
-                        enforce_retention(
+                        history_changed = enforce_retention(
                             self.config.destination,
                             self.config.retention_days,
-                            self.config.pattern
+                            self.config.pattern,
+                            self.sync_history
                         )
+                        if history_changed:
+                            self._persist_history()
 
                     processed_paths.append(file_path)
 

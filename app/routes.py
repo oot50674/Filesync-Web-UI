@@ -87,16 +87,11 @@ def _build_system_status():
     }
 
 
-<<<<<<< HEAD
 def _emit_status_event(config_id, is_running, status):
     try:
         socketio.emit("sync_update", _status_payload(config_id, is_running, status))
     except Exception:
         logger.exception("Failed to emit sync_update for config %s", config_id)
-
-
-=======
->>>>>>> 3c8d6cc2f1a84c62802af467e97ffcf75362c5d5
 def _start_sync_manager(config_row, resume=False):
     """
     config_row 정보를 기반으로 FileSyncManager를 기동합니다.

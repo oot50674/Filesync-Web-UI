@@ -4,11 +4,6 @@ import logging
 from flask_socketio import SocketIO
 
 
-SUPPRESSED_STATUS_PATHS = (
-    "/filesync/status",
-    "/server/status",
-)
-
 socketio = SocketIO(async_mode='threading')
 
 
@@ -68,5 +63,8 @@ def create_app():
     # 불필요한 상태 폴링 로그(werkzeug) 필터링
     werkzeug_logger = logging.getLogger("werkzeug")
     _ensure_status_filter(werkzeug_logger)
+
+    # SocketIO 초기화
+    socketio.init_app(app, async_mode='threading')
 
     return app

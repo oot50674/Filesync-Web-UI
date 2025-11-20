@@ -91,7 +91,7 @@ if __name__ == '__main__':
     _write_pid_file()
     try:
         logging.info("Filesync Web UI starting on port 5120")
-        socketio.run(app, debug=True, use_reloader=False, port=5120)
+        socketio.run(app, debug=True, use_reloader=False, port=5120, allow_unsafe_werkzeug=True)
     except KeyboardInterrupt:
         logging.info("Keyboard interrupt received. Stopping server.")
     finally:

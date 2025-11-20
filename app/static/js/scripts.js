@@ -214,10 +214,8 @@ window.syncStatusPanel = (options) => {
         },
 
         get progressVisible() {
-            if (!this.isRunning && this.progressPercent >= 100) {
-                return false;
-            }
-            return this.isRunning || (this.stateLabel && this.stateLabel !== 'IDLE') || this.progressPercent > 0;
+            // 프로그레스 바는 오직 동기화가 실제로 진행 중일 때만 보입니다.
+            return this.isRunning;
         },
     };
 };

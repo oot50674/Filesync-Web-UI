@@ -236,7 +236,13 @@ def update_sync_config():
             message="경로를 모두 입력해주세요."
         )
 
+    was_running = False
     if config_id:
+        config_id = int(config_id)
+        if config_id in sync_managers:
+            manager_entry = sync_managers[config_id]
+            manager = manager_entry['manager']
+            was_running = manager.running
         db.execute("""
             UPDATE sync_configs 
             SET name=?, source_path=?, replica_path=?, pattern=?, interval=?, retention_days=?
@@ -255,9 +261,19 @@ def update_sync_config():
     # 업데이트된 설정 다시 조회
     config_row = db.execute('SELECT * FROM sync_configs WHERE id = ?', (new_id,)).fetchone()
     config = dict(config_row)
+
+    restart_error = None
+    if was_running:
+        _stop_sync_manager(new_id)
+        restarted, error_message = _start_sync_manager(config_row)
+        if not restarted:
+            restart_error = error_message or "재시작 실패"
+            current_app.logger.error(f"Config {new_id} 재시작 실패: {restart_error}")
     
     # 상태 정보 주입
     is_running, status = _get_status_context(config['id'])
+    if restart_error:
+        status['details'] = f"설정 저장 후 재시작 실패: {restart_error}"
     config['is_running'] = is_running
     config['status'] = status
     

@@ -128,5 +128,9 @@ window.syncStatusPanel = function ({ configId, initialStatus, initialRunning }) 
         get progressLabel() {
             return `${Math.round(this.progressPercent)}% complete`;
         },
+
+        get progressVisible() {
+            return this.isRunning || (this.stateLabel && this.stateLabel !== "IDLE") || this.progressPercent > 0;
+        },
     };
 };

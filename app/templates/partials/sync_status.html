@@ -15,12 +15,9 @@
             <span class="font-bold" :class="isRunning ? 'text-green-600' : 'text-red-600'" x-text="stateLabel"></span>
         </p>
 
-        <p class="text-sm text-gray-500 mt-1 sync-status-details" x-show="details && !currentFile" x-text="details"></p>
+        <p class="text-sm text-gray-500 mt-1 sync-status-details" x-show="details" x-text="details"></p>
 
-        <div class="mt-3 sync-status-progress" x-show="currentFile && stateLabel !== 'IDLE'">
-            <p class="text-sm text-gray-700 sync-status-processing">
-                Processing: <span class="font-medium sync-status-file" x-text="currentFile"></span>
-            </p>
+        <div class="mt-3 sync-status-progress" x-show="progressVisible">
             <div class="w-full bg-gray-200 rounded-full h-2 mt-2 sync-status-progressbar-bg" role="progressbar"
                 aria-valuemin="0" aria-valuemax="100" :aria-valuenow="progressPercent">
                 <div class="h-2 rounded-full bg-blue-500 sync-status-progressbar-fill" :style="`width: ${progressPercent}%`"

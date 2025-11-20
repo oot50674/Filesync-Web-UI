@@ -510,6 +510,46 @@ class FileSyncManager:
         self.pending_files: Dict[Path, PendingFile] = {}
         self.history_path = history_file_path(self.config.destination)
         self.sync_history: Dict[str, str] = load_sync_history(self.history_path)
+        self._queue_total_bytes = 0
+        self._queue_completed_bytes = 0
+
+    def _reset_queue_progress(self) -> None:
+        self._queue_total_bytes = 0
+        self._queue_completed_bytes = 0
+        self._update_status(progress_percent=0)
+
+    def _add_queue_bytes(self, size: int) -> None:
+        if size <= 0:
+            return
+        self._queue_total_bytes += size
+
+    def _remove_queue_bytes(self, size: int) -> None:
+        if size <= 0:
+            return
+        self._queue_total_bytes = max(0, self._queue_total_bytes - size)
+        if self._queue_completed_bytes > self._queue_total_bytes:
+            self._queue_completed_bytes = self._queue_total_bytes
+
+    def _calculate_overall_percent(self, current_copied: int = 0) -> int:
+        total_bytes = self._queue_total_bytes
+        if total_bytes <= 0:
+            return 0
+        completed_bytes = self._queue_completed_bytes + max(0, current_copied)
+        percent = int((float(completed_bytes) / float(total_bytes)) * 100)
+        if percent > 100:
+            return 100
+        return percent
+
+    def _mark_queue_active(self, details: str = "") -> None:
+        status = self.get_status()
+        state = status.get("state", "")
+        if state in ("IDLE", "STOPPED"):
+            self._update_status(
+                state="SCANNING",
+                details=details or "Pending files detected",
+                current_file=status.get("current_file", ""),
+                progress_percent=self._calculate_overall_percent(),
+            )
 
     def _update_status(self, **kwargs) -> None:
         with self._status_lock:
@@ -518,18 +558,16 @@ class FileSyncManager:
 
     def _progress_callback(self, filename: str, copied: int, total: int) -> None:
         # (기존 코드와 동일)
-        percent = 0
-        if total:
-            percent = int((float(copied) / float(total)) * 100)
         detail = f"Copying {filename}"
         if total:
             detail = (
                 f"{filename}: {format_size(copied)} / {format_size(total)}"
             )
+        overall_percent = self._calculate_overall_percent(copied)
         self._update_status(
             state="COPYING",
             current_file=filename,
-            progress_percent=min(percent, 100),
+            progress_percent=overall_percent,
             details=detail,
         )
 
@@ -563,6 +601,7 @@ class FileSyncManager:
                 # 파일이 삭제된 경우 처리
                 if not file_path.exists():
                     logging.warning(f"File disappeared pending copy: {file_path}")
+                    self._remove_queue_bytes(info.last_size)
                     processed_paths.append(file_path)
                     continue
 
@@ -572,6 +611,12 @@ class FileSyncManager:
 
                 # 파일 상태가 변했는지 확인
                 if current_size != info.last_size or current_mtime != info.last_mtime:
+                    if current_size != info.last_size:
+                        size_delta = current_size - info.last_size
+                        if size_delta > 0:
+                            self._add_queue_bytes(size_delta)
+                        else:
+                            self._remove_queue_bytes(-size_delta)
                     # 변했다면 정보 갱신하고 타이머 리셋
                     info.last_size = current_size
                     info.last_mtime = current_mtime
@@ -592,6 +637,7 @@ class FileSyncManager:
                     if dest_size is not None:
                         if dest_size == current_size:
                             # 이미 완료된 파일이면 스킵
+                            self._remove_queue_bytes(current_size)
                             processed_paths.append(file_path)
                             continue
                         # 크기가 다르면 덮어쓰기
@@ -601,7 +647,8 @@ class FileSyncManager:
                     self._update_status(
                         state="COPYING",
                         current_file=file_path.name,
-                        details=f"Starting copy for {file_path.name}"
+                        details=f"Starting copy for {file_path.name}",
+                        progress_percent=self._calculate_overall_percent()
                     )
 
                     try:
@@ -615,16 +662,21 @@ class FileSyncManager:
                         )
                     except CopyCancelled:
                         logging.info(f"Copy operation cancelled for {file_path.name}")
+                        self._remove_queue_bytes(info.last_size)
                         processed_paths.append(file_path)
                         break
 
                     if copied_path:
                         existing_backups[file_key] = current_size
                         self._record_sync(copied_path)
+                        self._queue_completed_bytes += current_size
+                        overall_percent = self._calculate_overall_percent()
                         self._update_status(
-                            state="IDLE",
+                            state="COPYING",
+                            current_file="",
                             details=f"Synced: {file_path.name}",
-                            last_sync_time=datetime.utcnow().isoformat()
+                            last_sync_time=datetime.utcnow().isoformat(),
+                            progress_percent=overall_percent
                         )
                         # 보존 정책 적용
                         history_changed = enforce_retention(
@@ -635,11 +687,14 @@ class FileSyncManager:
                         )
                         if history_changed:
                             self._persist_history()
+                    else:
+                        self._remove_queue_bytes(current_size)
 
                     processed_paths.append(file_path)
 
             except Exception:
                 logging.exception(f"Error processing pending file: {file_path}")
+                self._remove_queue_bytes(info.last_size)
                 processed_paths.append(file_path)
 
         # 처리된 파일 대기열에서 제거
@@ -650,8 +705,12 @@ class FileSyncManager:
             logging.info(f"대기열 정리 완료: {len(processed_paths)}개 파일 처리됨, 남은 대기 파일: {len(self.pending_files)}개")
             
         if not self.pending_files and self.running:
-             self._update_status(
+            if self._queue_total_bytes and self._queue_completed_bytes < self._queue_total_bytes:
+                self._queue_completed_bytes = self._queue_total_bytes
+            self._update_status(
                 state="IDLE",
+                current_file="",
+                progress_percent=self._calculate_overall_percent(),
                 details="Monitoring for changes..."
             )
 
@@ -686,12 +745,16 @@ class FileSyncManager:
             # 새로 발견된 것으로 간주하고 등록
             try:
                 stat = file_path.stat()
+                if not self.pending_files:
+                    self._reset_queue_progress()
                 self.pending_files[file_path] = PendingFile(
                     path=file_path,
                     last_size=stat.st_size,
                     last_mtime=stat.st_mtime,
                     stable_since=now
                 )
+                self._add_queue_bytes(stat.st_size)
+                self._mark_queue_active(f"{file_path.name} 대기열 등록")
                 logging.info(f"대기열 등록 - 초기 파일: {file_path.name} ({format_size(stat.st_size)}), 총 대기 파일: {len(self.pending_files)}개")
             except FileNotFoundError:
                 continue
@@ -713,12 +776,16 @@ class FileSyncManager:
                         if file_path not in self.pending_files:
                             try:
                                 stat = file_path.stat()
+                                if not self.pending_files:
+                                    self._reset_queue_progress()
                                 self.pending_files[file_path] = PendingFile(
                                     path=file_path,
                                     last_size=stat.st_size,
                                     last_mtime=stat.st_mtime,
                                     stable_since=now
                                 )
+                                self._add_queue_bytes(stat.st_size)
+                                self._mark_queue_active(f"{file_path.name} 대기열 등록")
                                 logging.info(f"대기열 등록 - 새 파일 감지: {file_path.name} ({format_size(stat.st_size)}), 총 대기 파일: {len(self.pending_files)}개")
                             except FileNotFoundError:
                                 pass

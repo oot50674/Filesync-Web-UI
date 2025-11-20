@@ -214,6 +214,9 @@ window.syncStatusPanel = (options) => {
         },
 
         get progressVisible() {
+            if (!this.isRunning && this.progressPercent >= 100) {
+                return false;
+            }
             return this.isRunning || (this.stateLabel && this.stateLabel !== 'IDLE') || this.progressPercent > 0;
         },
     };

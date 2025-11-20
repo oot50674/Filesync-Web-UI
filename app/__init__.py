@@ -3,13 +3,32 @@ import os
 import logging
 
 
+SUPPRESSED_STATUS_PATHS = (
+    "/filesync/status",
+    "/server/status",
+)
+
+
 class StatusPollingFilter(logging.Filter):
     """HTMX 상태 폴링 라우트 로그를 숨기기 위한 필터"""
 
+    def __init__(self, name="", suppressed_paths=None):
+        super().__init__(name)
+        self.suppressed_paths = tuple(suppressed_paths or SUPPRESSED_STATUS_PATHS)
+
     def filter(self, record):
+        """로거 메시지에 특정 경로가 포함되어 있으면 로그를 숨긴다."""
         message = record.getMessage()
-        suppressed_paths = ("/filesync/status", "/server/status")
-        return not any(path in message for path in suppressed_paths)
+        return not any(path in message for path in self.suppressed_paths)
+
+
+def _ensure_status_filter(logger):
+    """중복 등록 없이 상태 폴링 필터를 보장한다."""
+    already_registered = any(
+        isinstance(f, StatusPollingFilter) for f in logger.filters
+    )
+    if not already_registered:
+        logger.addFilter(StatusPollingFilter())
 
 
 def create_app():
@@ -39,10 +58,6 @@ def create_app():
 
     # 불필요한 상태 폴링 로그(werkzeug) 필터링
     werkzeug_logger = logging.getLogger("werkzeug")
-    already_registered = any(
-        isinstance(f, StatusPollingFilter) for f in werkzeug_logger.filters
-    )
-    if not already_registered:
-        werkzeug_logger.addFilter(StatusPollingFilter())
+    _ensure_status_filter(werkzeug_logger)
 
     return app

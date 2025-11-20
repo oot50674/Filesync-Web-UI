@@ -8,7 +8,8 @@ class StatusPollingFilter(logging.Filter):
 
     def filter(self, record):
         message = record.getMessage()
-        return "/filesync/status" not in message
+        suppressed_paths = ("/filesync/status", "/server/status")
+        return not any(path in message for path in suppressed_paths)
 
 
 def create_app():

@@ -214,8 +214,9 @@ window.syncStatusPanel = (options) => {
         },
 
         get progressVisible() {
-            // 프로그레스 바는 오직 동기화가 실제로 진행 중일 때만 보입니다.
-            return this.isRunning;
+            // IDLE 상태에서는 프로그레스 바를 숨기고,
+            // 실제로 동기화가 실행 중인 경우에만 표시합니다.
+            return this.isRunning && this.stateLabel !== 'IDLE';
         },
     };
 };

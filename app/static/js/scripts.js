@@ -263,46 +263,38 @@ window.syncStatusPanel = (options) => {
         },
 
         _command(action) {
-            if (this.busy) {
-                return;
-            }
+            if (this.busy) return;
             this.busy = true;
             const endpoint = `/filesync/${action}/${this.configId}`;
             const requestUrl = typeof app.resolveUrl === 'function' ? app.resolveUrl(endpoint) : endpoint;
             fetch(requestUrl, {
-                method: 'POST',
-                headers: {
-                    Accept: 'application/json',
-                },
+            method: 'POST',
+            headers: { Accept: 'application/json' },
             })
-                .then((res) => {
-                    if (!res.ok) {
-                        throw new Error(`HTTP ${res.status}`);
-                    }
-                    const contentType = res.headers.get('content-type') || '';
-                    if (contentType.includes('application/json')) {
-                        return res.json();
-                    }
-                    return {};
-                })
-                .then((payload = {}) => {
-                    if (payload.status) {
-                        this.isRunning = Boolean(payload.is_running);
-                        this.applyStatus(payload.status);
-                        // 오류 메시지가 있으면 토스트 알림
-                        const detailMsg = (payload.status.details || '').trim();
-                        const isError = detailMsg && detailMsg.toLowerCase().includes('오류');
-                        if (isError && typeof window.Toast?.alert === 'function') {
-                            window.Toast.alert(detailMsg, { position: 'top-center', duration: 4500 });
-                        }
-                    }
-                })
-                .catch(() => {
-                    this.details = action === 'start' ? '동기화를 시작할 수 없습니다.' : '동기화를 중지할 수 없습니다.';
-                })
-                .finally(() => {
-                    this.busy = false;
-                });
+            .then((res) => {
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const contentType = res.headers.get('content-type') || '';
+                return contentType.includes('application/json') ? res.json() : {};
+            })
+            .then((payload = {}) => {
+                if (payload.status) {
+                this.isRunning = Boolean(payload.is_running);
+                this.applyStatus(payload.status);
+                const detailMsg = (payload.status.details || '').trim();
+                const isError = detailMsg && detailMsg.toLowerCase().includes('오류');
+                if (isError && typeof window.Toast?.alert === 'function') {
+                    window.Toast.alert(detailMsg, { position: 'top-center', duration: 4500 });
+                }
+                }
+            })
+            .catch(() => {
+                this.details = action === 'start'
+                ? '동기화를 시작할 수 없습니다.'
+                : '동기화를 중지할 수 없습니다.';
+            })
+            .finally(() => {
+                this.busy = false;
+            });
         },
 
         get progressLabel() {

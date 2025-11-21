@@ -93,6 +93,16 @@
             if (stateEl) stateEl.textContent = '오프라인';
             if (detailEl) detailEl.textContent = '서버 재시작 중';
         },
+        handleAfterRequest(message, toastType = 'info', reloadDelay = -1) {
+            if (window.Toast && typeof window.Toast[toastType] === 'function') {
+                window.Toast[toastType](message, { position: 'top-center' });
+            } else {
+                alert(message);
+            }
+            if (reloadDelay > 0) {
+                setTimeout(() => window.location.reload(), reloadDelay);
+            }
+        },
     };
 })();
 

@@ -166,8 +166,11 @@ def _start_sync_manager(config_row, resume=False):
         return False, str(exc)
 
 
-def _stop_sync_manager(config_id):
-    """특정 설정 ID의 동기화 작업을 중지합니다."""
+def _stop_sync_manager(config_id, update_db=True):
+    """특정 설정 ID의 동기화 작업을 중지합니다.
+
+    update_db=False이면 실행 상태 플래그를 유지한 채로 스레드만 종료합니다.
+    """
     if config_id in sync_managers:
         entry = sync_managers[config_id]
         manager = entry['manager']
@@ -181,9 +184,10 @@ def _stop_sync_manager(config_id):
         del sync_managers[config_id]
         
         # DB 상태 업데이트
-        db = get_db()
-        db.execute('UPDATE sync_configs SET is_active = 0 WHERE id = ?', (config_id,))
-        db.commit()
+        if update_db:
+            db = get_db()
+            db.execute('UPDATE sync_configs SET is_active = 0 WHERE id = ?', (config_id,))
+            db.commit()
 
 
 
@@ -403,7 +407,7 @@ def shutdown_server():
     """
     # 모든 동기화 작업 중지
     for config_id in list(sync_managers.keys()):
-        _stop_sync_manager(config_id)
+        _stop_sync_manager(config_id, update_db=False)
 
     # PID 파일 정리
     pid_target = os.environ.get('FILESYNC_PID_FILE')
@@ -431,7 +435,7 @@ def restart_server():
     """
     # 모든 동기화 작업 중지
     for config_id in list(sync_managers.keys()):
-        _stop_sync_manager(config_id)
+        _stop_sync_manager(config_id, update_db=False)
 
     # PID 파일 정리 (선택적)
     pid_target = os.environ.get('FILESYNC_PID_FILE')

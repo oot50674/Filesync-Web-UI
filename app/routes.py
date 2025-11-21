@@ -137,7 +137,6 @@ def _start_sync_manager(config_row, resume=False):
             retention_days=config_row['retention_days'],
             retention_mode=retention_mode,
             retention_files=retention_files,
-            scan_interval=config_row['interval']
         )
 
         if not logging.getLogger().handlers:
@@ -258,7 +257,7 @@ def update_sync_config():
     source_path = (request.form.get('source_path') or DEFAULT_SOURCE_PATH).strip()
     replica_path = (request.form.get('replica_path') or DEFAULT_REPLICA_PATH).strip()
     pattern = request.form.get('pattern', '*').strip() or '*'
-    interval = int(request.form.get('interval', 10))
+    interval = int(request.form.get('interval') or 0)
     retention_days = int(request.form.get('retention_days', 60))
     retention_mode = request.form.get('retention_mode', DEFAULT_RETENTION_MODE)
     retention_mode = retention_mode if retention_mode in ("days", "count") else DEFAULT_RETENTION_MODE
@@ -346,7 +345,7 @@ def add_sync_config():
         'source_path': DEFAULT_SOURCE_PATH,
         'replica_path': DEFAULT_REPLICA_PATH,
         'pattern': '*',
-        'interval': 10,
+        'interval': 0,
         'retention_days': 60,
         'retention_mode': DEFAULT_RETENTION_MODE,
         'retention_files': DEFAULT_RETENTION_FILES

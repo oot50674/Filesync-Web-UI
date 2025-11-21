@@ -4,6 +4,7 @@
     hx-on:htmx:after-request="if (window.Toast?.info) { Toast.info('설정이 저장되었습니다.', { position: 'top-center', duration: 3000 }); }"
     x-data="{ retentionMode: '{{ config.retention_mode }}' }">
     <input id="config-id-{{ form_suffix }}" type="hidden" name="id" value="{{ config.id }}">
+    <input id="config-interval-{{ form_suffix }}" type="hidden" name="interval" value="{{ config.interval or 0 }}">
     <div id="config-name-pattern-{{ form_suffix }}" class="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
             <label for="config-name-{{ form_suffix }}" class="block text-sm font-medium text-gray-700">Config Name</label>
@@ -30,13 +31,7 @@
             placeholder="예: /Users/user/Documents_backup" class="mt-1 block w-full border rounded px-3 py-2" required>
     </div>
 
-    <div id="schedule-retention-row-{{ form_suffix }}" class="grid grid-cols-1 lg:grid-cols-5 gap-4 items-start">
-        <div class="lg:col-span-2">
-            <label for="interval-{{ form_suffix }}" class="block text-sm font-medium text-gray-700">Interval (seconds)</label>
-            <input id="interval-{{ form_suffix }}" type="number" name="interval" value="{{ config.interval }}"
-                class="mt-1 block w-full border rounded px-3 py-2">
-            <p class="mt-1 text-xs text-gray-500">폴더 스캔 주기(초)입니다.</p>
-        </div>
+    <div id="schedule-retention-row-{{ form_suffix }}" class="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
         <div class="lg:col-span-1">
             <label for="retention-mode-{{ form_suffix }}" class="block text-sm font-medium text-gray-700">Retention Mode</label>
             <select id="retention-mode-{{ form_suffix }}" name="retention_mode"

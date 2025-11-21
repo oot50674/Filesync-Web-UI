@@ -1,4 +1,5 @@
-<div id="sync-card-{{ config.id }}" class="bg-white p-6 rounded-lg shadow-md mb-8" x-data="{ isFormOpen: false }">
+<div id="sync-card-{{ config.id }}" class="bg-white p-6 rounded-lg shadow-md mb-8"
+    x-data="{ isFormOpen: {% if not config.id %}true{% else %}false{% endif %} }">
     <div id="sync-card-header-{{ config.id }}" class="flex justify-between items-center mb-4 border-b pb-2 cursor-pointer select-none"
         @click="isFormOpen = !isFormOpen">
         <div class="flex items-center gap-2">

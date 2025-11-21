@@ -11,7 +11,7 @@
 - **동기화 설정 관리**:
   - 원본(Source) 및 대상(Replica) 폴더 경로 설정
   - 파일명 패턴 필터링 (예: `*.log`, `backup_*`)
-  - 스캔 간격, Retention Mode(기간 또는 파일 개수), 보존 기준 값 설정
+  - 실시간 파일 감시(watchdog), Retention Mode(기간 또는 파일 개수), 보존 기준 값 설정
 - **동기화 제어**: 웹 인터페이스에서 각 동기화 작업을 개별적으로 시작하거나 중지할 수 있습니다.
 - **자동 재시작**: 서버 재기동 후에도 활성화되어 있던 작업은 자동으로 재개됩니다.
 - **실시간 상태 모니터링**:
@@ -25,6 +25,7 @@
 ## 🛠 기술 스택
 
 - **Backend**: Python 3, Flask
+- **File Watcher**: watchdog
 - **Frontend**: HTML5, HTMX, Alpine.js, Tailwind CSS
 - **Database**: SQLite
 

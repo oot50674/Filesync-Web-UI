@@ -8,10 +8,13 @@ import shutil
 import sys
 import threading
 import time
+from queue import Empty, Queue
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Optional
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
 
 from app.utils import (
     format_size,
@@ -27,7 +30,6 @@ DEFAULT_PATTERN = "*"
 DEFAULT_RETENTION_DAYS = 60
 DEFAULT_RETENTION_MODE = "days"
 DEFAULT_RETENTION_FILES = 0
-DEFAULT_SCAN_INTERVAL = 10
 DEFAULT_SETTLE_SECONDS = 10
 COPY_CHUNK_SIZE = 8 * 1024 * 1024
 HISTORY_DIR_NAME = ".history"
@@ -46,6 +48,28 @@ class CopyCancelled(Exception):
     """복사 작업이 중단 요청으로 취소되었음을 나타내는 예외."""
 
 
+class _SyncEventHandler(FileSystemEventHandler):
+    def __init__(self, manager: "FileSyncManager"):
+        super().__init__()
+        self.manager = manager
+
+    def on_created(self, event):
+        self._handle_event(event)
+
+    def on_modified(self, event):
+        self._handle_event(event)
+
+    def on_moved(self, event):
+        target_path = getattr(event, "dest_path", None) or event.src_path
+        self._handle_event(event, override_path=target_path)
+
+    def _handle_event(self, event, override_path=None):
+        if event.is_directory:
+            return
+        target = Path(override_path or event.src_path)
+        self.manager.queue_file_event(target)
+
+
 class SyncConfig:
     def __init__(
         self,
@@ -55,18 +79,16 @@ class SyncConfig:
         retention_days: int = DEFAULT_RETENTION_DAYS,
         retention_mode: str = DEFAULT_RETENTION_MODE,
         retention_files: int = DEFAULT_RETENTION_FILES,
-        scan_interval: int = DEFAULT_SCAN_INTERVAL,
         settle_seconds: int = DEFAULT_SETTLE_SECONDS,
         log_level: str = "INFO",
     ):
-        self.source = source
-        self.destination = destination
+        self.source = source.resolve()
+        self.destination = destination.resolve()
         self.pattern = pattern
         self.patterns = parse_patterns(pattern)
         self.retention_days = retention_days
         self.retention_mode = retention_mode
         self.retention_files = retention_files
-        self.scan_interval = scan_interval
         self.settle_seconds = settle_seconds
         self.log_level = log_level
 
@@ -114,12 +136,6 @@ def parse_args() -> SyncConfig:
         help="파일 개수 기반 보존 시 유지할 최대 개수(기본값: %(default)s).",
     )
     parser.add_argument(
-        "--scan-interval",
-        type=int,
-        default=DEFAULT_SCAN_INTERVAL,
-        help="폴더 스캔 간격(초) (기본값: %(default)s).",
-    )
-    parser.add_argument(
         "--settle-seconds",
         type=int,
         default=DEFAULT_SETTLE_SECONDS,
@@ -139,7 +155,6 @@ def parse_args() -> SyncConfig:
         retention_days=args.retention_days,
         retention_mode=args.retention_mode,
         retention_files=args.retention_files,
-        scan_interval=args.scan_interval,
         settle_seconds=args.settle_seconds,
         log_level=args.log_level,
     )
@@ -511,6 +526,9 @@ class FileSyncManager:
             "updated_at": "",
         }
         self.pending_files: Dict[Path, PendingFile] = {}
+        self._event_queue: Queue[Path] = Queue()
+        self._observer: Optional[Observer] = None
+        self._existing_backups: Dict[str, int] = {}
         self.history_path = history_file_path(self.config.destination)
         self.sync_history: Dict[str, str] = load_sync_history(self.history_path)
         self._queue_total_bytes = 0
@@ -594,7 +612,94 @@ class FileSyncManager:
         self.sync_history[key] = datetime.utcnow().isoformat()
         self._persist_history()
 
-    def _process_pending_files(self, existing_backups: Dict[str, int]):
+    def queue_file_event(self, file_path: Path) -> None:
+        if not self.running:
+            return
+        try:
+            self._event_queue.put_nowait(Path(file_path))
+        except Exception:
+            logging.exception("Failed to queue file event: %s", file_path)
+
+    def _register_pending_file(self, file_path: Path, reason: str = "") -> None:
+        try:
+            normalized_path = Path(file_path).resolve()
+        except OSError:
+            return
+
+        if not normalized_path.exists() or not normalized_path.is_file():
+            return
+
+        try:
+            relative_path = normalized_path.relative_to(self.config.source)
+        except ValueError:
+            return
+
+        if not matches_patterns(normalized_path.name, self.config.patterns):
+            return
+
+        try:
+            stat = normalized_path.stat()
+        except FileNotFoundError:
+            return
+
+        file_key = relative_path.as_posix()
+        dest_size = self._existing_backups.get(file_key)
+        if dest_size is not None and dest_size == stat.st_size:
+            return
+
+        if normalized_path in self.pending_files:
+            return
+
+        if not self.pending_files:
+            self._reset_queue_progress()
+
+        self.pending_files[normalized_path] = PendingFile(
+            path=normalized_path,
+            last_size=stat.st_size,
+            last_mtime=stat.st_mtime,
+            stable_since=time.time(),
+        )
+        self._add_queue_bytes(stat.st_size)
+        label = reason or "변경 감지"
+        self._mark_queue_active(f"{normalized_path.name} {label}")
+        logging.info(
+            "대기열 등록 - %s: %s (%s), 총 대기 파일: %s개",
+            label,
+            normalized_path.name,
+            format_size(stat.st_size),
+            len(self.pending_files),
+        )
+
+    def _drain_event_queue(self) -> int:
+        added = 0
+        while True:
+            try:
+                path = self._event_queue.get_nowait()
+            except Empty:
+                break
+            self._register_pending_file(path, reason="변경 감지")
+            added += 1
+        return added
+
+    def _start_observer(self) -> None:
+        handler = _SyncEventHandler(self)
+        observer = Observer()
+        observer.schedule(handler, str(self.config.source), recursive=True)
+        observer.start()
+        self._observer = observer
+
+    def _stop_observer(self) -> None:
+        if not self._observer:
+            return
+        try:
+            self._observer.stop()
+            self._observer.join(timeout=5)
+        except Exception:
+            logging.exception("Failed to stop observer cleanly.")
+        finally:
+            self._observer = None
+
+    def _process_pending_files(self):
         now = time.time()
         processed_paths = []
 
@@ -646,7 +751,7 @@ class FileSyncManager:
                         file_key = file_path.relative_to(self.config.source).as_posix()
                     except ValueError:
                         file_key = file_path.name
-                    dest_size = existing_backups.get(file_key)
+                    dest_size = self._existing_backups.get(file_key)
                     overwrite = False
 
                     if dest_size is not None:
@@ -680,7 +785,7 @@ class FileSyncManager:
                         break
 
                     if copied_path:
-                        existing_backups[file_key] = current_size
+                        self._existing_backups[file_key] = current_size
                         self._record_sync(copied_path)
                         self._queue_completed_bytes += current_size
                         overall_percent = self._calculate_overall_percent()
@@ -728,8 +833,13 @@ class FileSyncManager:
                 state="IDLE",
                 current_file="",
                 progress_percent=self._calculate_overall_percent(),
-                details="Monitoring for changes...",
+                details="Watching for file changes...",
             )
+
+    def _seed_initial_pending(self) -> None:
+        initial_matches = snapshot_matching_files(self.config.source, self.config.patterns)
+        for file_path in initial_matches.keys():
+            self._register_pending_file(file_path, reason="초기 스캔")
 
     def run(self) -> None:
         self._stop_event.clear()
@@ -739,103 +849,69 @@ class FileSyncManager:
             details=f"Watching {self.config.source} -> {self.config.destination}",
         )
         logging.info(
-            "Started Watcher. Poll interval: %ss, Settle time: %ss",
-            self.config.scan_interval,
+            "Started watcher (watchdog). Settle time: %ss",
             self.config.settle_seconds,
         )
 
-        validate_paths(self.config.source, self.config.destination)
+        try:
+            validate_paths(self.config.source, self.config.destination)
+        except ValueError as exc:
+            logging.error(str(exc))
+            self.running = False
+            self._update_status(state="STOPPED", details=str(exc))
+            return
 
-        known_files = snapshot_matching_files(self.config.source, self.config.patterns)
-        existing_backups = get_existing_backups(
+        self._existing_backups = get_existing_backups(
             self.config.destination,
             self.config.patterns,
         )
 
-        now = time.time()
-        for file_path, mtime in known_files.items():
-            try:
-                file_key = file_path.relative_to(self.config.source).as_posix()
-            except ValueError:
-                file_key = file_path.name
-            if file_key in existing_backups:
-                if file_path.stat().st_size == existing_backups[file_key]:
-                    continue
-            try:
-                stat = file_path.stat()
-                if not self.pending_files:
-                    self._reset_queue_progress()
-                self.pending_files[file_path] = PendingFile(
-                    path=file_path,
-                    last_size=stat.st_size,
-                    last_mtime=stat.st_mtime,
-                    stable_since=now,
-                )
-                self._add_queue_bytes(stat.st_size)
-                self._mark_queue_active(f"{file_path.name} 대기열 등록")
-                logging.info(
-                    "대기열 등록 - 초기 파일: %s (%s), 총 대기 파일: %s개",
-                    file_path.name,
-                    format_size(stat.st_size),
-                    len(self.pending_files),
-                )
-            except FileNotFoundError:
-                continue
+        try:
+            self._start_observer()
+        except Exception:
+            logging.exception("Failed to start filesystem observer.")
+            self.running = False
+            self._update_status(state="STOPPED", details="파일 감시 초기화 실패")
+            return
+
+        self._seed_initial_pending()
 
         if not self.pending_files:
             self._update_status(
                 state="IDLE",
-                details="Monitoring for changes...",
+                details="Watching for file changes...",
             )
 
         try:
-            while self.running:
-                new_detected = detect_new_files(self.config.source, self.config.patterns, known_files)
-                if new_detected:
-                    now = time.time()
-                    for file_path in new_detected:
-                        if file_path in self.pending_files:
-                            continue
-                        try:
-                            stat = file_path.stat()
-                            if not self.pending_files:
-                                self._reset_queue_progress()
-                            self.pending_files[file_path] = PendingFile(
-                                path=file_path,
-                                last_size=stat.st_size,
-                                last_mtime=stat.st_mtime,
-                                stable_since=now,
-                            )
-                            self._add_queue_bytes(stat.st_size)
-                            self._mark_queue_active(f"{file_path.name} 대기열 등록")
-                            logging.info(
-                                "대기열 등록 - 새 파일 감지: %s (%s), 총 대기 파일: %s개",
-                                file_path.name,
-                                format_size(stat.st_size),
-                                len(self.pending_files),
-                            )
-                        except FileNotFoundError:
-                            pass
+            while self.running and not self._stop_event.is_set():
+                self._drain_event_queue()
 
                 if self.pending_files:
-                    self._process_pending_files(existing_backups)
-                    time.sleep(1)
+                    self._process_pending_files()
                 else:
-                    for _ in range(self.config.scan_interval):
-                        if not self.running or self.pending_files:
-                            break
-                        time.sleep(1)
+                    current_state = self.get_status().get("state")
+                    if current_state not in ("IDLE", "STOPPED"):
+                        self._update_status(
+                            state="IDLE",
+                            current_file="",
+                            progress_percent=self._calculate_overall_percent(),
+                            details="Watching for file changes...",
+                        )
+
+                time.sleep(1)
 
         except KeyboardInterrupt:
             logging.info("Stopping backup watcher.")
         finally:
             self.running = False
+            self._stop_observer()
             self._update_status(state="STOPPED", details="Sync stopped")
 
     def stop(self):
         logging.info("Stop signal received.")
         self._stop_event.set()
         self.running = False
+        self._stop_observer()
         self._update_status(
             state="STOPPED",
             current_file="",

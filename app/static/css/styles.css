@@ -11,3 +11,20 @@
 .htmx-request.htmx-indicator {
     opacity: 1;
 }
+
+[x-cloak] {
+    display: none !important;
+}
+
+/* 스크롤바를 숨기고 스크롤은 유지 */
+html,
+body {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE/Edge 구버전 */
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+}

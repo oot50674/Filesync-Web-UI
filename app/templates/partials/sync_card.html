@@ -33,16 +33,16 @@
 
         <!-- Configuration Section -->
         <div id="sync-config-section-{{ config.id }}" class="sync-config-section">
-            <template x-if="isFormOpen">
-                <div id="sync-config-wrapper-{{ config.id }}">
+            <div id="sync-config-wrapper-{{ config.id }}"
+                class="sync-config-wrapper grid overflow-hidden origin-top transition-[grid-template-rows] duration-500 ease-out {{ 'grid-rows-[1fr]' if not config.id else 'grid-rows-[0fr]' }}"
+                :class="isFormOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'">
+                <div id="sync-config-content-{{ config.id }}" class="min-h-0">
                     {% include 'partials/sync_config_form.html' %}
                 </div>
-            </template>
-            <template x-if="!isFormOpen">
-                <div id="sync-config-collapsed-hint-{{ config.id }}" class="text-sm text-gray-500">
-                    설정을 보려면 헤더를 클릭하세요.
-                </div>
-            </template>
+            </div>
+            <div id="sync-config-collapsed-hint-{{ config.id }}" class="text-sm text-gray-500" x-show="!isFormOpen">
+                설정을 보려면 헤더를 클릭하세요.
+            </div>
         </div>
     </div>
 </div>

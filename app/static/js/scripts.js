@@ -179,15 +179,31 @@ window.statusBadge = () => {
 // Alpine sync status panel (per configuration) - WebSocket driven
 window.syncStatusPanel = (options) => {
     const app = window.FileSyncApp || {};
+    const initialStatus = options.initialStatus || {};
+
+    const formatTimestamp = (str) => {
+        if (!str) return '';
+        const d = new Date(str.endsWith('Z') || str.includes('+') ? str : str + 'Z');
+        const now = new Date();
+        const isToday = d.toDateString() === now.toDateString();
+        const time = d.toLocaleTimeString('ko-KR', { hour12: false });
+        if (isToday) return time;
+        const year = d.getFullYear();
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day} ${time}`;
+    };
 
     return {
         configId: options.configId,
         isRunning: Boolean(options.initialRunning),
-        stateLabel: '',
-        details: '',
-        currentFile: '',
-        progressPercent: 0,
-        updatedAt: '',
+        stateLabel: initialStatus.state || (options.initialRunning ? 'RUNNING' : 'IDLE'),
+        details: initialStatus.details || '',
+        currentFile: initialStatus.current_file || '',
+        progressPercent: Number.isFinite(Number(initialStatus.progress_percent))
+            ? Math.min(100, Math.max(0, Number(initialStatus.progress_percent)))
+            : 0,
+        updatedAt: formatTimestamp(initialStatus.updated_at),
         busy: false,
         pathAlerted: false,
 
@@ -219,20 +235,7 @@ window.syncStatusPanel = (options) => {
             const percent = Number(payload.progress_percent);
             this.progressPercent = Number.isFinite(percent) ? Math.min(100, Math.max(0, percent)) : 0;
 
-            const format = (str) => {
-                if (!str) return '';
-                const d = new Date(str.endsWith('Z') || str.includes('+') ? str : str + 'Z');
-                const now = new Date();
-                const isToday = d.toDateString() === now.toDateString();
-                const time = d.toLocaleTimeString('ko-KR', { hour12: false });
-                if (isToday) return time;
-                const year = d.getFullYear();
-                const month = String(d.getMonth() + 1).padStart(2, '0');
-                const day = String(d.getDate()).padStart(2, '0');
-                return `${year}-${month}-${day} ${time}`;
-            };
-
-            this.updatedAt = format(payload.updated_at);
+            this.updatedAt = formatTimestamp(payload.updated_at);
 
             // 소스/백업 경로 오류 시 즉시 알림
             const detailText = (this.details || '').toLowerCase();

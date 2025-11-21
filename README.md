@@ -1,6 +1,6 @@
 # Filesync Web UI
 
-<img width="1092" height="1128" alt="image" src="https://github.com/user-attachments/assets/81478aee-8c69-4fc8-9e78-1dc882d27e07" />
+<img width="854" height="1195" alt="image" src="https://github.com/user-attachments/assets/8dd118a1-f1f6-4be6-9c5a-972610f8ed0c" />
 
 
 
@@ -107,6 +107,7 @@ Filesync-Web-UI/
 ## 📝 라이선스
 
 이 프로젝트는 MIT 라이선스를 따릅니다.
+
 
 
 

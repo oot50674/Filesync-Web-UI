@@ -47,3 +47,31 @@ def init_app(app):
     app.teardown_appcontext(close_db)
     app.cli.add_command(init_db_command)
 
+
+def ensure_schema_upgrades():
+    """
+    기존 DB에 누락된 컬럼이 있으면 자동으로 추가합니다.
+    """
+    db = get_db()
+    table_info = db.execute("PRAGMA table_info(sync_configs)").fetchall()
+    if not table_info:
+        return
+
+    columns = {row["name"] for row in table_info}
+    altered = False
+
+    if "retention_mode" not in columns:
+        db.execute(
+            "ALTER TABLE sync_configs ADD COLUMN retention_mode TEXT DEFAULT 'days'"
+        )
+        altered = True
+
+    if "retention_files" not in columns:
+        db.execute(
+            "ALTER TABLE sync_configs ADD COLUMN retention_files INTEGER DEFAULT 0"
+        )
+        altered = True
+
+    if altered:
+        db.commit()
+

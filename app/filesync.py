@@ -25,6 +25,8 @@ from app.utils import (
 
 DEFAULT_PATTERN = "*"
 DEFAULT_RETENTION_DAYS = 60
+DEFAULT_RETENTION_MODE = "days"
+DEFAULT_RETENTION_FILES = 0
 DEFAULT_SCAN_INTERVAL = 10
 DEFAULT_SETTLE_SECONDS = 10
 COPY_CHUNK_SIZE = 8 * 1024 * 1024
@@ -51,6 +53,8 @@ class SyncConfig:
         destination: Path,
         pattern: str = DEFAULT_PATTERN,
         retention_days: int = DEFAULT_RETENTION_DAYS,
+        retention_mode: str = DEFAULT_RETENTION_MODE,
+        retention_files: int = DEFAULT_RETENTION_FILES,
         scan_interval: int = DEFAULT_SCAN_INTERVAL,
         settle_seconds: int = DEFAULT_SETTLE_SECONDS,
         log_level: str = "INFO",
@@ -60,6 +64,8 @@ class SyncConfig:
         self.pattern = pattern
         self.patterns = parse_patterns(pattern)
         self.retention_days = retention_days
+        self.retention_mode = retention_mode
+        self.retention_files = retention_files
         self.scan_interval = scan_interval
         self.settle_seconds = settle_seconds
         self.log_level = log_level
@@ -96,6 +102,18 @@ def parse_args() -> SyncConfig:
         help="대상 폴더에서 복사본을 유지할 일 수 (기본값: %(default)s).",
     )
     parser.add_argument(
+        "--retention-mode",
+        choices=["days", "count"],
+        default=DEFAULT_RETENTION_MODE,
+        help="보존 방식: 일(day) 단위 또는 파일 개수 기반.",
+    )
+    parser.add_argument(
+        "--retention-files",
+        type=int,
+        default=DEFAULT_RETENTION_FILES,
+        help="파일 개수 기반 보존 시 유지할 최대 개수(기본값: %(default)s).",
+    )
+    parser.add_argument(
         "--scan-interval",
         type=int,
         default=DEFAULT_SCAN_INTERVAL,
@@ -119,6 +137,8 @@ def parse_args() -> SyncConfig:
         destination=args.destination,
         pattern=args.pattern,
         retention_days=args.retention_days,
+        retention_mode=args.retention_mode,
+        retention_files=args.retention_files,
         scan_interval=args.scan_interval,
         settle_seconds=args.settle_seconds,
         log_level=args.log_level,
@@ -333,7 +353,16 @@ def enforce_retention(
     retention_days: int,
     patterns: list[str],
     sync_history: Dict[str, str],
+    retention_mode: str = DEFAULT_RETENTION_MODE,
+    retention_files: int = DEFAULT_RETENTION_FILES,
 ) -> bool:
+    if retention_mode == "count":
+        return _enforce_count_retention(
+            destination,
+            patterns,
+            sync_history,
+            retention_files,
+        )
     if retention_days <= 0:
         return False
     if not destination.exists():
@@ -380,6 +409,64 @@ def enforce_retention(
 
     if deleted:
         logging.info("Retention cleanup removed %s file(s).", deleted)
+
+    return history_changed
+
+
+def _enforce_count_retention(
+    destination: Path,
+    patterns: list[str],
+    sync_history: Dict[str, str],
+    retention_files: int,
+) -> bool:
+    if retention_files <= 0:
+        return False
+    if not destination.exists():
+        return False
+
+    file_entries: list[tuple[Path, datetime, str]] = []
+
+    for file_path in destination.rglob("*"):
+        try:
+            if not file_path.is_file():
+                continue
+            relative_parts = file_path.relative_to(destination).parts
+            if relative_parts and relative_parts[0] == HISTORY_DIR_NAME:
+                continue
+            if not matches_patterns(file_path.name, patterns):
+                continue
+
+            history_key = build_history_key(destination, file_path)
+            synced_at_str = sync_history.get(history_key)
+            synced_at: Optional[datetime] = None
+            if synced_at_str:
+                try:
+                    synced_at = datetime.fromisoformat(synced_at_str)
+                except ValueError:
+                    logging.warning("Invalid sync history timestamp for %s", history_key)
+
+            if synced_at is None:
+                synced_at = datetime.fromtimestamp(file_path.stat().st_mtime)
+
+            file_entries.append((file_path, synced_at, history_key))
+        except Exception:
+            logging.exception("Failed to evaluate retention for %s", file_path)
+
+    if len(file_entries) <= retention_files:
+        return False
+
+    sorted_entries = sorted(file_entries, key=lambda item: item[1], reverse=True)
+    targets = sorted_entries[retention_files:]
+    history_changed = False
+
+    for file_path, _, history_key in targets:
+        try:
+            file_path.unlink()
+            if sync_history.pop(history_key, None) is not None:
+                history_changed = True
+            logging.info("Removed overflow backup: %s", file_path)
+        except Exception:
+            logging.exception("Failed to remove overflow file: %s", file_path)
 
     return history_changed
 
@@ -609,6 +696,8 @@ class FileSyncManager:
                             self.config.retention_days,
                             self.config.patterns,
                             self.sync_history,
+                            self.config.retention_mode,
+                            self.config.retention_files,
                         )
                         if history_changed:
                             self._persist_history()

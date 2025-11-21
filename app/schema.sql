@@ -9,6 +9,8 @@ CREATE TABLE sync_configs (
     pattern TEXT DEFAULT '*',
     interval INTEGER DEFAULT 10,
     retention_days INTEGER DEFAULT 60,
+    retention_mode TEXT DEFAULT 'days',
+    retention_files INTEGER DEFAULT 0,
     is_active BOOLEAN DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

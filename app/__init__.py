@@ -56,6 +56,10 @@ def create_app():
         with app.app_context():
             db.init_db()
 
+    # 누락된 컬럼 자동 보정
+    with app.app_context():
+        db.ensure_schema_upgrades()
+
     # 블루프린트(라우트) 등록
     from .routes import main
     app.register_blueprint(main)

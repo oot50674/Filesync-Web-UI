@@ -17,7 +17,13 @@ from flask import Blueprint, render_template, request, current_app, jsonify
 
 from app import socketio
 from app.db import get_db
-from app.filesync import FileSyncManager, SyncConfig, validate_paths
+from app.filesync import (
+    DEFAULT_RETENTION_FILES,
+    DEFAULT_RETENTION_MODE,
+    FileSyncManager,
+    SyncConfig,
+    validate_paths,
+)
 
 # 전역 동기화 관리자 상태 (config_id -> {manager, thread})
 sync_managers = {}
@@ -114,6 +120,8 @@ def _start_sync_manager(config_row, resume=False):
     db = get_db()
     source_path = config_row['source_path'] or DEFAULT_SOURCE_PATH
     replica_path = config_row['replica_path'] or DEFAULT_REPLICA_PATH
+    retention_mode = config_row['retention_mode'] or DEFAULT_RETENTION_MODE
+    retention_files = config_row['retention_files'] or DEFAULT_RETENTION_FILES
 
     try:
         # 경로 사전 검증: 존재하지 않으면 즉시 실패 반환
@@ -127,6 +135,8 @@ def _start_sync_manager(config_row, resume=False):
             destination=Path(replica_path),
             pattern=config_row['pattern'],
             retention_days=config_row['retention_days'],
+            retention_mode=retention_mode,
+            retention_files=retention_files,
             scan_interval=config_row['interval']
         )
 
@@ -211,6 +221,8 @@ def index():
         config = dict(row)
         config['source_path'] = config.get('source_path') or DEFAULT_SOURCE_PATH
         config['replica_path'] = config.get('replica_path') or DEFAULT_REPLICA_PATH
+        config['retention_mode'] = config.get('retention_mode') or DEFAULT_RETENTION_MODE
+        config['retention_files'] = config.get('retention_files') or DEFAULT_RETENTION_FILES
         
         # 각 설정에 대한 현재 상태 주입
         is_running, status = _get_status_context(config['id'])
@@ -248,6 +260,10 @@ def update_sync_config():
     pattern = request.form.get('pattern', '*').strip() or '*'
     interval = int(request.form.get('interval', 10))
     retention_days = int(request.form.get('retention_days', 60))
+    retention_mode = request.form.get('retention_mode', DEFAULT_RETENTION_MODE)
+    retention_mode = retention_mode if retention_mode in ("days", "count") else DEFAULT_RETENTION_MODE
+    retention_files = int(request.form.get('retention_files') or DEFAULT_RETENTION_FILES)
+    retention_files = max(retention_files, 0)
     config_id = request.form.get('id')
     
     if not source_path or not replica_path:
@@ -260,7 +276,9 @@ def update_sync_config():
             'replica_path': replica_path,
             'pattern': pattern,
             'interval': interval,
-            'retention_days': retention_days
+            'retention_days': retention_days,
+            'retention_mode': retention_mode,
+            'retention_files': retention_files,
         }
         return render_template(
             'partials/sync_config_form.html',
@@ -277,15 +295,15 @@ def update_sync_config():
             was_running = manager.running
         db.execute("""
             UPDATE sync_configs 
-            SET name=?, source_path=?, replica_path=?, pattern=?, interval=?, retention_days=?
+            SET name=?, source_path=?, replica_path=?, pattern=?, interval=?, retention_days=?, retention_mode=?, retention_files=?
             WHERE id=?
-        """, (name, source_path, replica_path, pattern, interval, retention_days, config_id))
+        """, (name, source_path, replica_path, pattern, interval, retention_days, retention_mode, retention_files, config_id))
         new_id = config_id
     else:
         cursor = db.execute("""
-            INSERT INTO sync_configs (name, source_path, replica_path, pattern, interval, retention_days)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (name, source_path, replica_path, pattern, interval, retention_days))
+            INSERT INTO sync_configs (name, source_path, replica_path, pattern, interval, retention_days, retention_mode, retention_files)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (name, source_path, replica_path, pattern, interval, retention_days, retention_mode, retention_files))
         new_id = cursor.lastrowid
         
     db.commit()
@@ -293,6 +311,8 @@ def update_sync_config():
     # 업데이트된 설정 다시 조회
     config_row = db.execute('SELECT * FROM sync_configs WHERE id = ?', (new_id,)).fetchone()
     config = dict(config_row)
+    config['retention_mode'] = config.get('retention_mode') or DEFAULT_RETENTION_MODE
+    config['retention_files'] = config.get('retention_files') or DEFAULT_RETENTION_FILES
 
     restart_error = None
     if was_running:
@@ -327,7 +347,9 @@ def add_sync_config():
         'replica_path': DEFAULT_REPLICA_PATH,
         'pattern': '*',
         'interval': 10,
-        'retention_days': 60
+        'retention_days': 60,
+        'retention_mode': DEFAULT_RETENTION_MODE,
+        'retention_files': DEFAULT_RETENTION_FILES
     }
     return render_template('partials/sync_card.html', config=new_config)
 

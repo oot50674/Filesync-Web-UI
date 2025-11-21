@@ -59,6 +59,10 @@ def create_app():
     # 블루프린트(라우트) 등록
     from .routes import main
     app.register_blueprint(main)
+    
+    # 테스트 블루프린트 등록
+    from .test import test_bp
+    app.register_blueprint(test_bp)
 
     # 불필요한 상태 폴링 로그(werkzeug) 필터링
     werkzeug_logger = logging.getLogger("werkzeug")

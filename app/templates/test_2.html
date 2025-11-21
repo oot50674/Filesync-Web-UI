@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Time Test (Alpine.js)</title>
+    
+    <!-- Socket.IO 클라이언트 라이브러리 -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <!-- Alpine.js 라이브러리 -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.3/dist/cdn.min.js"></script>
+    
+    <style>
+        body {
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f2f5;
+        }
+        .card {
+            background: white;
+            padding: 2rem;
+            border-radius: 1rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+        h1 { margin-top: 0; color: #333; }
+        #time-display {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: #2563eb;
+            margin-top: 1rem;
+            font-variant-numeric: tabular-nums;
+        }
+        .status {
+            margin-top: 1rem;
+            font-size: 0.875rem;
+            color: #666;
+        }
+        .dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background-color: #ccc;
+            border-radius: 50%;
+            margin-right: 6px;
+        }
+        /* Alpine.js에서 connected 클래스가 토글될 때 적용됨 */
+        .status.connected .dot { background-color: #10b981; }
+        .message-form {
+            margin-top: 2rem;
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+        .message-input {
+            flex: 1;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 0.5rem;
+            font-size: 1rem;
+        }
+        .message-input:focus {
+            outline: none;
+            border-color: #2563eb;
+        }
+        .send-button {
+            padding: 0.75rem 1.5rem;
+            background-color: #2563eb;
+            color: white;
+            border: none;
+            border-radius: 0.5rem;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .send-button:hover:not(:disabled) {
+            background-color: #1d4ed8;
+        }
+        .send-button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .control-buttons {
+            margin-top: 1.5rem;
+            display: flex;
+            gap: 0.5rem;
+            justify-content: center;
+        }
+        .control-button {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .control-button.start {
+            background-color: #10b981;
+            color: white;
+        }
+        .control-button.start:hover:not(:disabled) {
+            background-color: #059669;
+        }
+        .control-button.stop {
+            background-color: #ef4444;
+            color: white;
+        }
+        .control-button.stop:hover:not(:disabled) {
+            background-color: #dc2626;
+        }
+        .control-button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <!-- Alpine.js 컴포넌트 시작 -->
+    <div class="card" x-data="socketTimeApp()">
+        <h1>Server Time</h1>
+        
+        <!-- 시간 표시 (반응형 텍스트) -->
+        <div id="time-display" x-text="time">--:--:--</div>
+        
+        <!-- 상태 표시 (클래스 및 텍스트 바인딩) -->
+        <div class="status" :class="{ 'connected': connected }">
+            <span class="dot"></span>
+            <span x-text="statusText">Disconnected</span>
+        </div>
+        
+        <!-- 서버 시간 전송 제어 버튼 -->
+        <div class="control-buttons">
+            <button 
+                class="control-button start"
+                @click="startTimeSender"
+                :disabled="!connected || timeListenerActive"
+            >
+                시간 수신 시작
+            </button>
+            <button 
+                class="control-button stop"
+                @click="stopTimeSender"
+                :disabled="!connected || !timeListenerActive"
+            >
+                시간 수신 중지
+            </button>
+            <button
+                class="control-button stop"
+                @click="terminateServerSocket"
+                :disabled="!connected"
+            >
+                서버 소켓 종료
+            </button>
+        </div>
+        
+        <!-- 텍스트 전송 폼 -->
+        <div class="message-form">
+            <input 
+                type="text" 
+                class="message-input" 
+                x-model="messageText"
+                @keyup.enter="sendMessage"
+                placeholder="서버로 전송할 메시지를 입력하세요"
+                :disabled="!connected"
+            >
+            <button 
+                class="send-button"
+                @click="sendMessage"
+                :disabled="!connected || !messageText.trim()"
+            >
+                전송
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // Alpine 초기화 이벤트를 사용하지 않고, x-data에 직접 함수를 바인딩하는 방식입니다.
+        // 사용법: <div x-data="socketTimeApp()"></div>
+        function socketTimeApp() {
+            return {
+                // 상태 변수
+                time: '--:--:--',
+                connected: false,
+                statusText: 'Disconnected',
+                socket: null,
+                messageText: 'Hello Server!', // 전송할 메시지 텍스트
+                timeListenerActive: true, // 클라이언트 시간 수신 리스너 활성화 상태
+                timeHandler: null, // 시간 이벤트 핸들러 참조
+
+                // 컴포넌트 초기화: Alpine은 init()이 있으면 자동으로 호출합니다.
+                init() {
+                    // 1. Socket.IO 연결 생성
+                    this.socket = io({
+                        path: '/socket.io',
+                        transports: ['websocket', 'polling']
+                    });
+
+                    // 2. 연결 이벤트 핸들러
+                    this.socket.on('connect', () => {
+                        this.connected = true;
+                        this.statusText = 'Connected';
+                        console.log('서버에 연결되었습니다.');
+                    });
+
+                    this.socket.on('disconnect', () => {
+                        this.connected = false;
+                        this.statusText = 'Disconnected';
+                        console.log('서버와의 연결이 끊어졌습니다.');
+                    });
+
+                    // 3. 서버 시간 수신 핸들러 정의 및 등록
+                    this.timeHandler = (data) => {
+                        if (data && data.time) {
+                            this.time = data.time;
+                        }
+                    };
+                    this.socket.on('server_time', this.timeHandler);
+                    
+                    // 서버가 소켓 통신을 종료할 때 수신 처리
+                    this.socket.on('server_shutdown', (data) => {
+                        this.statusText = 'Server Shutdown';
+                        console.log('서버가 소켓 통신을 종료했습니다.', data);
+                        try { this.socket.disconnect(); } catch (e) {}
+                        this.connected = false;
+                        this.timeListenerActive = false;
+                        this.time = '--:--:--';
+                    });
+                },
+                
+                // 메시지 전송 메서드
+                sendMessage() {
+                    if (!this.connected || !this.messageText.trim()) {
+                        return;
+                    }
+                    
+                    // 서버로 메시지 전송
+                    this.socket.emit('client_message', {
+                        message: this.messageText.trim()
+                    });
+                    
+                    // 입력 필드 초기화
+                    this.messageText = '';
+                },
+                
+                // 서버 시간 수신 시작 (리스너 등록)
+                startTimeSender() {
+                    if (!this.connected || this.timeListenerActive) {
+                        return;
+                    }
+                    this.socket.on('server_time', this.timeHandler);
+                    this.timeListenerActive = true;
+                    console.log('시간 수신 리스너 활성화');
+                },
+                
+                // 서버 시간 수신 중지 (리스너 제거)
+                stopTimeSender() {
+                    if (!this.connected || !this.timeListenerActive) {
+                        return;
+                    }
+                    this.socket.off('server_time', this.timeHandler);
+                    this.timeListenerActive = false;
+                    this.time = '--:--:--';
+                    console.log('시간 수신 리스너 비활성화');
+                },
+
+                // 서버의 소켓 통신 종료 요청 (서버 측에서 모든 클라이언트에 서버 종료 알림 전송)
+                terminateServerSocket() {
+                    if (!this.connected) {
+                        return;
+                    }
+                    this.socket.emit('terminate_server_socket', { reason: 'requested_by_client' });
+                }
+            };
+        }
+    </script>
+</body>
+</html>

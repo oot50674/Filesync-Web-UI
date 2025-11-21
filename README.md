@@ -1,6 +1,7 @@
 # Filesync Web UI
 
-<img width="1299" height="1179" alt="image" src="https://github.com/user-attachments/assets/05d023ea-e4ef-4bc1-a6c8-c828bb79cc1b" />
+<img width="1092" height="1128" alt="image" src="https://github.com/user-attachments/assets/81478aee-8c69-4fc8-9e78-1dc882d27e07" />
+
 
 
 **Filesync Web UI**는 로컬 파일 동기화 작업을 관리하고 모니터링하기 위한 웹 기반 인터페이스입니다.
@@ -105,6 +106,7 @@ Filesync-Web-UI/
 ## 📝 라이선스
 
 이 프로젝트는 MIT 라이선스를 따릅니다.
+
 
 
 

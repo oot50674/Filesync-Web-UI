@@ -4,14 +4,20 @@ Flask 라우트 정의 모듈
 이 모듈은 애플리케이션의 모든 HTTP 라우트를 정의합니다.
 HTMX를 사용한 부분 렌더링과 서버 사이드 렌더링을 결합한 하이브리드 방식으로 구현되어 있습니다.
 """
-from flask import Blueprint, render_template, request, current_app, jsonify
-from datetime import datetime
-import threading
 import logging
+import os
+import subprocess
+import sys
+import threading
+import time
+from datetime import datetime
 from pathlib import Path
+
+from flask import Blueprint, render_template, request, current_app, jsonify
+
 from app import socketio
 from app.db import get_db
-from app.filesync import FileSyncManager, SyncConfig
+from app.filesync import FileSyncManager, SyncConfig, validate_paths
 
 # 전역 동기화 관리자 상태 (config_id -> {manager, thread})
 sync_managers = {}
@@ -110,6 +116,12 @@ def _start_sync_manager(config_row, resume=False):
     replica_path = config_row['replica_path'] or DEFAULT_REPLICA_PATH
 
     try:
+        # 경로 사전 검증: 존재하지 않으면 즉시 실패 반환
+        try:
+            validate_paths(Path(source_path), Path(replica_path))
+        except ValueError as exc:
+            return False, str(exc)
+
         sync_config = SyncConfig(
             source=Path(source_path),
             destination=Path(replica_path),
@@ -365,9 +377,9 @@ def start_sync(config_id):
     if not success:
         details = "동기화 시작 중 오류가 발생했습니다."
         if error_message:
-            details = f"{details} ({error_message})"
+            details = error_message
         is_running, status = _get_status_context(config_id, details=details)
-        return render_template('partials/sync_status.html', is_running=is_running, status=status, config_id=config_id)
+        return _status_response(config_id, is_running, status)
 
     is_running, status = _get_status_context(config_id)
     return _status_response(config_id, is_running, status)
@@ -389,10 +401,6 @@ def shutdown_server():
     """
     [HTMX] 서버 종료
     """
-    import os
-    import threading
-    import time
-
     # 모든 동기화 작업 중지
     for config_id in list(sync_managers.keys()):
         _stop_sync_manager(config_id)
@@ -421,11 +429,6 @@ def restart_server():
     """
     [HTMX] 서버 재시작
     """
-    import os
-    import threading
-    import time
-    import sys
-
     # 모든 동기화 작업 중지
     for config_id in list(sync_managers.keys()):
         _stop_sync_manager(config_id)
@@ -439,14 +442,16 @@ def restart_server():
         except OSError:
             pass
 
-    # 서버 재시작: 동일한 파이썬 인터프리터로 현재 프로세스를 exec
+    # 서버 재시작: 동일한 파이썬 인터프리터로 현재 프로세스를 새로 띄우고 종료
     def delayed_restart():
         time.sleep(0.5)
         try:
             python = sys.executable
-            os.execv(python, [python] + sys.argv)
+            args = [python] + sys.argv
+            subprocess.Popen(args, close_fds=True)
         except Exception:
-            current_app.logger.exception("Failed to execv for restart; exiting instead.")
+            current_app.logger.exception("Failed to spawn process for restart.")
+        finally:
             os._exit(0)
 
     threading.Thread(target=delayed_restart, daemon=True).start()

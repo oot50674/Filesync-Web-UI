@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import shutil
 import sys
 import threading
@@ -211,9 +212,11 @@ def copy_file_with_progress(
     destination_path: Path,
     progress_callback=None,
     cancel_event: Optional[threading.Event] = None,
+    mode: str = "wb",
+    start_pos: int = 0,
 ) -> None:
     total_size = source_file.stat().st_size
-    copied = 0
+    copied = start_pos
 
     def should_cancel() -> bool:
         return cancel_event is not None and cancel_event.is_set()
@@ -221,7 +224,9 @@ def copy_file_with_progress(
     if progress_callback:
         progress_callback(source_file.name, copied, total_size)
     try:
-        with source_file.open("rb") as src, destination_path.open("wb") as dst:
+        with source_file.open("rb") as src, destination_path.open(mode) as dst:
+            if start_pos > 0:
+                src.seek(start_pos)
             while True:
                 if should_cancel():
                     raise CopyCancelled(f"Copy cancelled: {source_file}")
@@ -257,47 +262,69 @@ def copy_backup(
         source_root,
         overwrite_existing=overwrite_existing,
     )
+
+    temp_path = destination_path.with_suffix(destination_path.suffix + ".part")
+
     copy_completed = False
     try:
-        total_size = format_size(source_file.stat().st_size)
+        total_size = source_file.stat().st_size
+
+        resume_mode = False
+        start_pos = 0
+        mode = "wb"
+
+        if temp_path.exists():
+            temp_size = temp_path.stat().st_size
+            if temp_size < total_size:
+                logging.info("Resuming incomplete transfer: %s", temp_path.name)
+                resume_mode = True
+                start_pos = temp_size
+                mode = "ab"
+            else:
+                logging.info("Temp file invalid (size mismatch). Restarting: %s", temp_path.name)
+
         logging.info(
-            "Starting copy %s (%s) -> %s",
+            "Starting copy %s -> %s (resume=%s)",
             source_file,
-            total_size,
             destination_path,
+            resume_mode,
         )
-        if overwrite_existing and destination_path.exists():
-            try:
-                destination_path.unlink()
-            except PermissionError:
-                logging.warning("Cannot delete existing file (in use): %s. Skipping copy.", destination_path)
-                return None
+
         destination_path.parent.mkdir(parents=True, exist_ok=True)
+
         copy_file_with_progress(
             source_file,
-            destination_path,
+            temp_path,
             progress_callback=progress_callback,
             cancel_event=cancel_event,
+            mode=mode,
+            start_pos=start_pos,
         )
+
+        if destination_path.exists():
+            try:
+                if overwrite_existing:
+                    destination_path.unlink()
+                else:
+                    logging.warning("Target exists and overwrite is False. Skipping replacement.")
+                    return None
+            except OSError:
+                pass
+
+        os.replace(temp_path, destination_path)
+
         shutil.copystat(source_file, destination_path, follow_symlinks=True)
-        logging.info("Copied %s -> %s", source_file, destination_path)
+
+        logging.info("Sync completed: %s", destination_path.name)
         copy_completed = True
         return destination_path
+
     except CopyCancelled:
-        logging.info("Copy cancelled for %s -> %s", source_file, destination_path)
+        logging.info("Copy cancelled. Saved progress in: %s", temp_path.name)
         raise
     except Exception:
         logging.exception("Failed to copy %s", source_file)
-    finally:
-        if not copy_completed:
-            try:
-                if destination_path.exists():
-                    destination_path.unlink()
-                    logging.info("Removed incomplete backup: %s", destination_path)
-            except PermissionError:
-                logging.warning("Failed to remove incomplete backup (in use): %s", destination_path)
-            except Exception:
-                logging.exception("Unexpected error while removing incomplete backup: %s", destination_path)
+
     return None
 
 
@@ -363,6 +390,8 @@ def get_existing_backups(destination: Path, patterns: list[str]) -> Dict[str, in
         return existing
     for file_path in destination.rglob("*"):
         if not file_path.is_file():
+            continue
+        if file_path.suffix == ".part":
             continue
         try:
             relative_parts = file_path.relative_to(destination).parts

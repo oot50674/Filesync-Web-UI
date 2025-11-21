@@ -11,6 +11,7 @@
 
     <!-- HTMX CSS Styles -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/toast.min.css') }}">
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
     
     <!-- HTMX: 서버와의 HTML 조각 교환을 담당 -->
@@ -23,6 +24,7 @@
 
     <!-- Alpine.js: 클라이언트 사이드 인터랙션 담당 -->
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.3/dist/cdn.min.js"></script>
+    <script src="{{ url_for('static', filename='js/toast.min.js') }}"></script>
     <script src="{{ url_for('static', filename='js/scripts.js') }}"></script>
 </head>
 

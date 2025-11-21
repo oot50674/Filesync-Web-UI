@@ -56,6 +56,43 @@
         fetchJson,
         getSyncSocket,
         routes: runtimeConfig.routes || {},
+        confirmAndDispatch(el, message, opts = {}) {
+            const target = el || document.body;
+            const eventName = opts.eventName || 'confirmed';
+            const dispatch = () => target && target.dispatchEvent(new Event(eventName, { bubbles: true }));
+            const toastConfirm = typeof window.Toast?.confirm === 'function';
+            if (toastConfirm) {
+                window.Toast.confirm(
+                    message || '계속 진행하시겠습니까?',
+                    () => dispatch(),
+                    () => {},
+                    {
+                        title: opts.title || '확인 필요',
+                        okText: opts.okText || '확인',
+                        cancelText: opts.cancelText || '취소',
+                        position: 'top-center',
+                        duration: 0,
+                    },
+                );
+                return;
+            }
+            if (window.confirm(message || '계속 진행하시겠습니까?')) {
+                dispatch();
+            }
+        },
+        setBadgeOffline() {
+            const el = document.getElementById('system-status-badge');
+            if (!el) return;
+            const dot = el.querySelector('[data-role="dot"]');
+            const stateEl = el.querySelector('[data-role="state"]');
+            const detailEl = el.querySelector('[data-role="detail"]');
+            const badgeClass = 'bg-red-900/40 text-red-100 border-red-500/60';
+            const dotClass = 'w-2 h-2 rounded-full animate-pulse bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.8)]';
+            el.className = `px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-2 border transition-colors duration-200 ${badgeClass}`;
+            if (dot) dot.className = `${dotClass}`;
+            if (stateEl) stateEl.textContent = '오프라인';
+            if (detailEl) detailEl.textContent = '서버 재시작 중';
+        },
     };
 })();
 
@@ -142,6 +179,7 @@ window.syncStatusPanel = (options) => {
         progressPercent: 0,
         updatedAt: '',
         busy: false,
+        pathAlerted: false,
 
         init() {
             this.applyStatus(options.initialStatus || {});
@@ -185,6 +223,22 @@ window.syncStatusPanel = (options) => {
             };
 
             this.updatedAt = format(payload.updated_at);
+
+            // 소스/백업 경로 오류 시 즉시 알림
+            const detailText = (this.details || '').toLowerCase();
+            const pathError =
+                detailText.includes('does not exist or is not a directory') ||
+                detailText.includes('경로');
+            if (pathError && !this.pathAlerted && typeof window.Toast?.alert === 'function') {
+                window.Toast.alert(this.details || '소스/백업 경로를 확인하세요.', {
+                    title: '경로 오류',
+                    position: 'top-center',
+                    duration: 5000,
+                });
+                this.pathAlerted = true;
+            } else if (!pathError) {
+                this.pathAlerted = false;
+            }
         },
 
         startSync() {
@@ -211,6 +265,23 @@ window.syncStatusPanel = (options) => {
                 .then((res) => {
                     if (!res.ok) {
                         throw new Error(`HTTP ${res.status}`);
+                    }
+                    const contentType = res.headers.get('content-type') || '';
+                    if (contentType.includes('application/json')) {
+                        return res.json();
+                    }
+                    return {};
+                })
+                .then((payload = {}) => {
+                    if (payload.status) {
+                        this.isRunning = Boolean(payload.is_running);
+                        this.applyStatus(payload.status);
+                        // 오류 메시지가 있으면 토스트 알림
+                        const detailMsg = (payload.status.details || '').trim();
+                        const isError = detailMsg && detailMsg.toLowerCase().includes('오류');
+                        if (isError && typeof window.Toast?.alert === 'function') {
+                            window.Toast.alert(detailMsg, { position: 'top-center', duration: 4500 });
+                        }
                     }
                 })
                 .catch(() => {

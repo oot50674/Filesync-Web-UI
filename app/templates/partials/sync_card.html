@@ -1,11 +1,20 @@
-<div id="sync-card-{{ config.id }}" class="bg-white p-6 rounded-lg shadow-md mb-8">
-    <div class="flex justify-between items-center mb-4 border-b pb-2">
-        <h2 class="text-xl font-semibold">{{ config.name }}</h2>
+<div id="sync-card-{{ config.id }}" class="bg-white p-6 rounded-lg shadow-md mb-8" x-data="{ isFormOpen: false }">
+    <div id="sync-card-header-{{ config.id }}" class="flex justify-between items-center mb-4 border-b pb-2 cursor-pointer select-none"
+        @click="isFormOpen = !isFormOpen">
+        <div class="flex items-center gap-2">
+            <svg id="sync-card-toggle-icon-{{ config.id }}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"
+                class="w-4 h-4 text-gray-500 transition-transform duration-200"
+                :class="isFormOpen ? 'rotate-90' : ''" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M7 4l6 6-6 6" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <h2 class="text-xl font-semibold">{{ config.name }}</h2>
+        </div>
         {% if config.id %}
-        <button type="button" hx-delete="/filesync/delete/{{ config.id }}" hx-trigger="confirmed"
+        <button id="sync-card-delete-{{ config.id }}" type="button" hx-delete="/filesync/delete/{{ config.id }}" hx-trigger="confirmed"
             onclick="window.FileSyncApp?.confirmAndDispatch(this, '이 동기화 설정을 삭제하시겠습니까?', { title: '삭제 확인', okText: '삭제', cancelText: '취소' });"
             hx-target="#sync-card-{{ config.id }}" hx-swap="outerHTML"
-            class="border border-gray-300 text-gray-500 hover:bg-gray-100 hover:text-red-600 font-medium py-1 px-3 rounded text-sm transition duration-200">
+            class="border border-gray-300 text-gray-500 hover:bg-gray-100 hover:text-red-600 font-medium py-1 px-3 rounded text-sm transition duration-200"
+            @click.stop>
             Delete
         </button>
         {% endif %}
@@ -22,8 +31,17 @@
         {% endif %}
 
         <!-- Configuration Section -->
-        <div>
-            {% include 'partials/sync_config_form.html' %}
+        <div id="sync-config-section-{{ config.id }}" class="sync-config-section">
+            <template x-if="isFormOpen">
+                <div id="sync-config-wrapper-{{ config.id }}">
+                    {% include 'partials/sync_config_form.html' %}
+                </div>
+            </template>
+            <template x-if="!isFormOpen">
+                <div id="sync-config-collapsed-hint-{{ config.id }}" class="text-sm text-gray-500">
+                    설정을 보려면 헤더를 클릭하세요.
+                </div>
+            </template>
         </div>
     </div>
 </div>

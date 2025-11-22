@@ -56,30 +56,57 @@
         fetchJson,
         getSyncSocket,
         routes: runtimeConfig.routes || {},
+        /**
+         * Toast.confirm(사용 가능 시) 또는 window.confirm을 사용하여 확인 대화상자를 표시하고,
+         * 사용자가 확인하면 커스텀 이벤트를 디스패치합니다.
+         *
+         * @param {HTMLElement} el - 이벤트를 디스패치할 대상 요소입니다. 지정하지 않으면 document.body가 기본값입니다.
+         * @param {string} message - 표시할 확인 메시지입니다. 지정하지 않으면 '계속 진행하시겠습니까?'가 기본값입니다.
+         * @param {Object} [opts={}] - 확인 대화상자 및 이벤트에 대한 옵션 설정입니다.
+         * @param {string} [opts.eventName='confirmed'] - 확인 시 디스패치할 이벤트 이름입니다.
+         * @param {string} [opts.title='확인 필요'] - 확인 대화상자 제목(Toast.confirm 전용)입니다.
+         * @param {string} [opts.okText='확인'] - 확인 버튼 텍스트(Toast.confirm 전용)입니다.
+         * @param {string} [opts.cancelText='취소'] - 취소 버튼 텍스트(Toast.confirm 전용)입니다.
+         * @param {string} [opts.position='top-center'] - Toast 대화상자 위치(Toast.confirm 전용)입니다.
+         * @param {number} [opts.duration=0] - 대화상자 자동 종료까지의 시간(Toast.confirm 전용)입니다.
+         */
+
+        /**
+         * 확인 대화상자를 표시하고, 사용자가 확인하면 커스텀 이벤트를 디스패치합니다.
+         * Toast.confirm이 있으면 사용, 없으면 window.confirm 사용.
+         * @param {HTMLElement} el - 이벤트를 디스패치할 대상 요소
+         * @param {string} message - 확인 메시지
+         * @param {Object} opts - 옵션 (eventName, title, okText, cancelText 등)
+         */
         confirmAndDispatch(el, message, opts = {}) {
             const target = el || document.body;
             const eventName = opts.eventName || 'confirmed';
             const dispatch = () => target && target.dispatchEvent(new Event(eventName, { bubbles: true }));
             const toastConfirm = typeof window.Toast?.confirm === 'function';
             if (toastConfirm) {
-                window.Toast.confirm(
-                    message || '계속 진행하시겠습니까?',
-                    () => dispatch(),
-                    () => {},
-                    {
-                        title: opts.title || '확인 필요',
-                        okText: opts.okText || '확인',
-                        cancelText: opts.cancelText || '취소',
-                        position: 'top-center',
-                        duration: 0,
-                    },
-                );
-                return;
+            window.Toast.confirm(
+                message || '계속 진행하시겠습니까?',
+                () => dispatch(),
+                () => {},
+                {
+                title: opts.title || '확인 필요',
+                okText: opts.okText || '확인',
+                cancelText: opts.cancelText || '취소',
+                position: 'top-center',
+                duration: 0,
+                },
+            );
+            return;
             }
             if (window.confirm(message || '계속 진행하시겠습니까?')) {
-                dispatch();
+            dispatch();
             }
         },
+
+        /**
+         * 상태 배지를 오프라인 상태로 변경합니다.
+         * 서버가 중단되었거나 연결이 끊긴 경우 호출.
+         */
         setBadgeOffline() {
             const el = document.getElementById('system-status-badge');
             if (!el) return;
@@ -93,20 +120,27 @@
             if (stateEl) stateEl.textContent = '오프라인';
             if (detailEl) detailEl.textContent = '서버 재시작 중';
         },
+
+        /**
+         * 요청 후 메시지를 토스트 또는 alert로 표시하고, 필요시 페이지를 새로고침합니다.
+         * @param {string} message - 표시할 메시지
+         * @param {string} toastType - 토스트 타입(info, success, error 등)
+         * @param {number} reloadDelay - 새로고침까지 대기 시간(ms), 음수면 새로고침 없음
+         */
         handleAfterRequest(message, toastType = 'info', reloadDelay = -1) {
             if (window.Toast && typeof window.Toast[toastType] === 'function') {
-                window.Toast[toastType](message, { position: 'top-center' });
+            window.Toast[toastType](message, { position: 'top-center' });
             } else {
-                alert(message);
+            alert(message);
             }
             if (reloadDelay > 0) {
-                setTimeout(() => window.location.reload(), reloadDelay);
+            setTimeout(() => window.location.reload(), reloadDelay);
             }
         },
     };
 })();
 
-// Alpine statusBadge component (client-side polling/rendering)
+// Alpine statusBadge 컴포넌트 (클라이언트 폴링/렌더링)
 window.statusBadge = () => {
     const app = window.FileSyncApp || {};
     const routes = app.routes || {};
@@ -176,7 +210,7 @@ window.statusBadge = () => {
     };
 };
 
-// Alpine sync status panel (per configuration) - WebSocket driven
+// Alpine 동기화 상태 패널 (구성별) - WebSocket 기반
 window.syncStatusPanel = (options) => {
     const app = window.FileSyncApp || {};
     const initialStatus = options.initialStatus || {};
@@ -254,13 +288,8 @@ window.syncStatusPanel = (options) => {
             }
         },
 
-        startSync() {
-            this._command('start');
-        },
-
-        stopSync() {
-            this._command('stop');
-        },
+        startSync() { this._command('start'); },
+        stopSync() { this._command('stop'); },
 
         _command(action) {
             if (this.busy) return;

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Dict, Optional
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
+from watchdog.observers.api import BaseObserver
 
 from app.utils import (
     format_size,
@@ -550,9 +551,9 @@ class FileSyncManager:
             "updated_at": "",
         }
         self.pending_files: Dict[Path, PendingFile] = {}
-        self._event_queue: Queue[Path] = Queue()
-        self._delete_queue: Queue[Path] = Queue()
-        self._observer: Optional[Observer] = None
+        self._event_queue: Queue = Queue()
+        self._delete_queue: Queue = Queue()
+        self._observer: Optional[BaseObserver] = None
         self._existing_backups: Dict[str, int] = {}
         self.history_path = history_file_path(self.config.destination)
         self.sync_history: Dict[str, str] = load_sync_history(self.history_path)
@@ -703,6 +704,12 @@ class FileSyncManager:
             len(self.pending_files),
         )
 
+    def _pending_items_snapshot(self) -> list[tuple[Path, PendingFile]]:
+        items = list(self.pending_files.items())
+        if self.config.retention_mode == "count" and self.config.retention > 0:
+            items.sort(key=lambda entry: entry[1].last_mtime, reverse=True)
+        return items
+
     def _drain_event_queue(self) -> int:
         added = 0
         while True:
@@ -804,7 +811,7 @@ class FileSyncManager:
         if self.pending_files:
             logging.debug("대기열 상태 확인 - 총 %s개 파일 처리 중", len(self.pending_files))
 
-        for file_path, info in list(self.pending_files.items()):
+        for file_path, info in self._pending_items_snapshot():
             if not self.running:
                 break
 
@@ -938,7 +945,20 @@ class FileSyncManager:
 
     def _seed_initial_pending(self) -> None:
         initial_matches = snapshot_matching_files(self.config.source, self.config.patterns)
-        for file_path in initial_matches.keys():
+        matches_items = list(initial_matches.items())
+
+        if self.config.retention_mode == "count" and self.config.retention > 0:
+            matches_items.sort(key=lambda item: item[1], reverse=True)
+            limit = min(self.config.retention, len(matches_items))
+            if len(matches_items) > limit:
+                logging.info(
+                    "Count retention mode - limiting initial sync to %s of %s source files",
+                    limit,
+                    len(matches_items),
+                )
+            matches_items = matches_items[:limit]
+
+        for file_path, _ in matches_items:
             self._register_pending_file(file_path, reason="초기 스캔")
 
     def run(self) -> None:

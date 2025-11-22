@@ -1,0 +1,13 @@
+{
+    "name": "File Sync Web UI",
+    "short_name": "FileSync",
+    "start_url": "/",
+    "display": "standalone",
+    "icons": [
+        {
+            "src": "favicon.svg",
+            "sizes": "any",
+            "type": "image/svg+xml"
+        }
+    ]
+}

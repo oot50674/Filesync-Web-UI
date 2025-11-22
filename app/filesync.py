@@ -27,10 +27,9 @@ from app.utils import (
 )
 
 DEFAULT_PATTERN = "*"
-DEFAULT_RETENTION_DAYS = 60
+DEFAULT_RETENTION = 60
 DEFAULT_RETENTION_MODE = "days"
-DEFAULT_RETENTION_FILES = 0
-DEFAULT_SETTLE_SECONDS = 10
+DEFAULT_SETTLE_SECONDS = 3
 COPY_CHUNK_SIZE = 8 * 1024 * 1024
 HISTORY_DIR_NAME = ".history"
 HISTORY_FILE_NAME = "sync_history.json"
@@ -62,6 +61,10 @@ class _SyncEventHandler(FileSystemEventHandler):
     def on_moved(self, event):
         target_path = getattr(event, "dest_path", None) or event.src_path
         self._handle_event(event, override_path=target_path)
+        self.manager.queue_delete_event(Path(event.src_path))
+
+    def on_deleted(self, event):
+        self.manager.queue_delete_event(Path(event.src_path))
 
     def _handle_event(self, event, override_path=None):
         if event.is_directory:
@@ -76,9 +79,8 @@ class SyncConfig:
         source: Path,
         destination: Path,
         pattern: str = DEFAULT_PATTERN,
-        retention_days: int = DEFAULT_RETENTION_DAYS,
+        retention: int = DEFAULT_RETENTION,
         retention_mode: str = DEFAULT_RETENTION_MODE,
-        retention_files: int = DEFAULT_RETENTION_FILES,
         settle_seconds: int = DEFAULT_SETTLE_SECONDS,
         log_level: str = "INFO",
     ):
@@ -86,9 +88,8 @@ class SyncConfig:
         self.destination = destination.resolve()
         self.pattern = pattern
         self.patterns = parse_patterns(pattern)
-        self.retention_days = retention_days
-        self.retention_mode = retention_mode
-        self.retention_files = retention_files
+        self.retention = max(0, int(retention))
+        self.retention_mode = retention_mode if retention_mode in ("days", "count", "sync") else DEFAULT_RETENTION_MODE
         self.settle_seconds = settle_seconds
         self.log_level = log_level
 
@@ -118,22 +119,26 @@ def parse_args() -> SyncConfig:
         help="콤마(,)로 구분된 글롭 패턴 목록 (예: *.bak,*.zip).",
     )
     parser.add_argument(
-        "--retention-days",
-        type=int,
-        default=DEFAULT_RETENTION_DAYS,
-        help="대상 폴더에서 복사본을 유지할 일 수 (기본값: %(default)s).",
+        "--retention-mode",
+        choices=["days", "count", "sync"],
+        default=DEFAULT_RETENTION_MODE,
+        help="보존 방식: 기간(일), 파일 개수, 또는 동기화(삭제 전파).",
     )
     parser.add_argument(
-        "--retention-mode",
-        choices=["days", "count"],
-        default=DEFAULT_RETENTION_MODE,
-        help="보존 방식: 일(day) 단위 또는 파일 개수 기반.",
+        "--retention",
+        type=int,
+        default=DEFAULT_RETENTION,
+        help="보존 값 (일수 또는 파일 개수). 동기화 모드에서는 무시됩니다.",
+    )
+    parser.add_argument(
+        "--retention-days",
+        type=int,
+        help="호환용: 기간 기반 보존 일수 (retention-mode=days일 때만 사용).",
     )
     parser.add_argument(
         "--retention-files",
         type=int,
-        default=DEFAULT_RETENTION_FILES,
-        help="파일 개수 기반 보존 시 유지할 최대 개수(기본값: %(default)s).",
+        help="호환용: 개수 기반 보존 파일 수 (retention-mode=count일 때만 사용).",
     )
     parser.add_argument(
         "--settle-seconds",
@@ -148,13 +153,22 @@ def parse_args() -> SyncConfig:
         help="로그 상세 수준 (기본값: %(default)s).",
     )
     args = parser.parse_args()
+    retention_value = args.retention
+    if args.retention_mode == "days" and args.retention_days is not None:
+        retention_value = args.retention_days
+    elif args.retention_mode == "count" and args.retention_files is not None:
+        retention_value = args.retention_files
+
+    if args.retention_mode == "sync":
+        retention_value = 0
+
+    retention_value = max(retention_value, 0)
     return SyncConfig(
         source=args.source,
         destination=args.destination,
         pattern=args.pattern,
-        retention_days=args.retention_days,
+        retention=retention_value,
         retention_mode=args.retention_mode,
-        retention_files=args.retention_files,
         settle_seconds=args.settle_seconds,
         log_level=args.log_level,
     )
@@ -365,19 +379,29 @@ def copy_backup(
 
 def enforce_retention(
     destination: Path,
-    retention_days: int,
+    retention: int,
     patterns: list[str],
     sync_history: Dict[str, str],
     retention_mode: str = DEFAULT_RETENTION_MODE,
-    retention_files: int = DEFAULT_RETENTION_FILES,
 ) -> bool:
+    if retention_mode == "sync":
+        return False
     if retention_mode == "count":
         return _enforce_count_retention(
             destination,
             patterns,
             sync_history,
-            retention_files,
+            retention,
         )
+    return _enforce_days_retention(destination, patterns, sync_history, retention)
+
+
+def _enforce_days_retention(
+    destination: Path,
+    patterns: list[str],
+    sync_history: Dict[str, str],
+    retention_days: int,
+) -> bool:
     if retention_days <= 0:
         return False
     if not destination.exists():
@@ -432,9 +456,9 @@ def _enforce_count_retention(
     destination: Path,
     patterns: list[str],
     sync_history: Dict[str, str],
-    retention_files: int,
+    retention_limit: int,
 ) -> bool:
-    if retention_files <= 0:
+    if retention_limit <= 0:
         return False
     if not destination.exists():
         return False
@@ -467,11 +491,11 @@ def _enforce_count_retention(
         except Exception:
             logging.exception("Failed to evaluate retention for %s", file_path)
 
-    if len(file_entries) <= retention_files:
+    if len(file_entries) <= retention_limit:
         return False
 
     sorted_entries = sorted(file_entries, key=lambda item: item[1], reverse=True)
-    targets = sorted_entries[retention_files:]
+    targets = sorted_entries[retention_limit:]
     history_changed = False
 
     for file_path, _, history_key in targets:
@@ -527,6 +551,7 @@ class FileSyncManager:
         }
         self.pending_files: Dict[Path, PendingFile] = {}
         self._event_queue: Queue[Path] = Queue()
+        self._delete_queue: Queue[Path] = Queue()
         self._observer: Optional[Observer] = None
         self._existing_backups: Dict[str, int] = {}
         self.history_path = history_file_path(self.config.destination)
@@ -620,6 +645,14 @@ class FileSyncManager:
         except Exception:
             logging.exception("Failed to queue file event: %s", file_path)
 
+    def queue_delete_event(self, file_path: Path) -> None:
+        if not self.running or self.config.retention_mode != "sync":
+            return
+        try:
+            self._delete_queue.put_nowait(Path(file_path))
+        except Exception:
+            logging.exception("Failed to queue delete event: %s", file_path)
+
     def _register_pending_file(self, file_path: Path, reason: str = "") -> None:
         try:
             normalized_path = Path(file_path).resolve()
@@ -680,6 +713,71 @@ class FileSyncManager:
             self._register_pending_file(path, reason="변경 감지")
             added += 1
         return added
+
+    def _drain_delete_queue(self) -> None:
+        while True:
+            try:
+                self._delete_queue.get_nowait()
+            except Empty:
+                break
+
+    def _handle_source_deletion(self, source_path: Path) -> tuple[bool, bool]:
+        try:
+            normalized_path = Path(source_path).resolve()
+        except OSError:
+            return False, False
+
+        try:
+            relative_path = normalized_path.relative_to(self.config.source)
+        except ValueError:
+            return False, False
+
+        if not matches_patterns(relative_path.name, self.config.patterns):
+            return False, False
+
+        target_path = self.config.destination / relative_path
+        history_key = build_history_key(self.config.destination, target_path)
+        history_changed = False
+
+        if not target_path.exists() or target_path.is_dir():
+            self._existing_backups.pop(relative_path.as_posix(), None)
+            history_changed = self.sync_history.pop(history_key, None) is not None
+            return False, history_changed
+
+        try:
+            target_path.unlink()
+            history_changed = self.sync_history.pop(history_key, None) is not None
+            self._existing_backups.pop(relative_path.as_posix(), None)
+            logging.info("Source 삭제 감지 -> Replica 삭제: %s", target_path)
+            return True, history_changed
+        except Exception:
+            logging.exception("Failed to mirror deletion for %s", target_path)
+            return False, False
+
+    def _process_delete_events(self) -> None:
+        if self.config.retention_mode != "sync":
+            self._drain_delete_queue()
+            return
+
+        removed = 0
+        history_changed = False
+
+        while True:
+            try:
+                path = self._delete_queue.get_nowait()
+            except Empty:
+                break
+
+            deleted, history_updated = self._handle_source_deletion(path)
+            if deleted:
+                removed += 1
+            if history_updated:
+                history_changed = True
+
+        if history_changed:
+            self._persist_history()
+        if removed:
+            logging.info("삭제 동기화 처리 완료: %s개 파일", removed)
 
     def _start_observer(self) -> None:
         handler = _SyncEventHandler(self)
@@ -752,15 +850,18 @@ class FileSyncManager:
                     except ValueError:
                         file_key = file_path.name
                     dest_size = self._existing_backups.get(file_key)
-                    overwrite = False
+                    overwrite = self.config.retention_mode == "sync"
 
                     if dest_size is not None:
                         if dest_size == current_size:
                             self._remove_queue_bytes(current_size)
                             processed_paths.append(file_path)
                             continue
-                        overwrite = True
-                        logging.warning("Incomplete backup detected for %s, overwriting.", file_path.name)
+                        if overwrite:
+                            logging.info("동기화 모드 - 기존 파일 덮어쓰기: %s", file_path.name)
+                        else:
+                            overwrite = True
+                            logging.warning("Incomplete backup detected for %s, overwriting.", file_path.name)
 
                     self._update_status(
                         state="COPYING",
@@ -798,11 +899,10 @@ class FileSyncManager:
                         )
                         history_changed = enforce_retention(
                             self.config.destination,
-                            self.config.retention_days,
+                            self.config.retention,
                             self.config.patterns,
                             self.sync_history,
                             self.config.retention_mode,
-                            self.config.retention_files,
                         )
                         if history_changed:
                             self._persist_history()
@@ -885,6 +985,7 @@ class FileSyncManager:
         try:
             while self.running and not self._stop_event.is_set():
                 self._drain_event_queue()
+                self._process_delete_events()
 
                 if self.pending_files:
                     self._process_pending_files()

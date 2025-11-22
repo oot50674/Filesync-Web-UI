@@ -21,7 +21,7 @@
         {% endif %}
     </div>
 
-    <div class="grid gap-8">
+    <div class="grid gap-3">
         <!-- Status Section -->
         {% if config.id %}
         <div id="sync-status-section-{{ config.id }}" class="bg-gray-50 p-4 rounded border">
@@ -39,9 +39,6 @@
                 <div id="sync-config-content-{{ config.id }}" class="min-h-0">
                     {% include 'partials/sync_config_form.html' %}
                 </div>
-            </div>
-            <div id="sync-config-collapsed-hint-{{ config.id }}" class="text-sm text-gray-500" x-show="!isFormOpen">
-                설정을 보려면 헤더를 클릭하세요.
             </div>
         </div>
     </div>

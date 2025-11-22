@@ -64,11 +64,28 @@ def ensure_schema_upgrades():
         db.execute(
             "ALTER TABLE sync_configs ADD COLUMN retention_mode TEXT DEFAULT 'days'"
         )
+        columns.add("retention_mode")
         altered = True
 
-    if "retention_files" not in columns:
+    added_retention = False
+    if "retention" not in columns:
         db.execute(
-            "ALTER TABLE sync_configs ADD COLUMN retention_files INTEGER DEFAULT 0"
+            "ALTER TABLE sync_configs ADD COLUMN retention INTEGER DEFAULT 60"
+        )
+        columns.add("retention")
+        altered = True
+        added_retention = True
+
+    if added_retention and ("retention_days" in columns or "retention_files" in columns):
+        db.execute(
+            """
+            UPDATE sync_configs
+            SET retention = CASE
+                WHEN retention_mode = 'count' THEN COALESCE(retention_files, retention_days, retention)
+                WHEN retention_mode = 'sync' THEN 0
+                ELSE COALESCE(retention_days, retention_files, retention)
+            END
+            """
         )
         altered = True
 

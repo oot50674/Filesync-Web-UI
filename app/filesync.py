@@ -36,6 +36,133 @@ HISTORY_DIR_NAME = ".history"
 HISTORY_FILE_NAME = "sync_history.json"
 
 
+class _CopyLane:
+    """동일 소스 경로를 공유하는 작업 간 COPY 순서를 직렬화하는 대기열."""
+
+    def __init__(self, source_key: str):
+        self.source_key = source_key
+        self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
+        self._active_id: Optional[int] = None
+        self._waiting: list[int] = []
+        self._last_served_id: Optional[int] = None
+
+    def _remove_waiter(self, config_id: int) -> None:
+        self._waiting = [cid for cid in self._waiting if cid != config_id]
+
+    def _next_candidate(self) -> Optional[int]:
+        if not self._waiting:
+            return None
+        unique_sorted = sorted(set(self._waiting))
+        if self._last_served_id is None:
+            return unique_sorted[0]
+        higher = [cid for cid in unique_sorted if cid > self._last_served_id]
+        if higher:
+            return higher[0]
+        return unique_sorted[0]
+
+    def acquire(
+        self,
+        config_id: int,
+        cancel_event: threading.Event,
+        on_wait=None,
+    ) -> bool:
+        with self._condition:
+            if config_id not in self._waiting:
+                self._waiting.append(config_id)
+            while True:
+                if cancel_event.is_set():
+                    self._remove_waiter(config_id)
+                    self._condition.notify_all()
+                    return False
+
+                next_candidate = self._next_candidate()
+                can_take_slot = (
+                    (self._active_id is None or self._active_id == config_id)
+                    and next_candidate == config_id
+                )
+                if can_take_slot:
+                    self._remove_waiter(config_id)
+                    self._active_id = config_id
+                    return True
+
+                if on_wait:
+                    try:
+                        on_wait(config_id, self._active_id, next_candidate)
+                    except Exception:
+                        logging.exception("Copy lane wait callback failed.")
+                self._condition.wait(timeout=0.5)
+
+    def release(self, config_id: int) -> None:
+        with self._condition:
+            if self._active_id == config_id:
+                self._active_id = None
+                self._last_served_id = config_id
+                self._condition.notify_all()
+
+    def abandon(self, config_id: int) -> None:
+        with self._condition:
+            self._remove_waiter(config_id)
+            if self._active_id == config_id:
+                self._active_id = None
+                self._last_served_id = config_id
+            self._condition.notify_all()
+
+
+class SourceCopyCoordinator:
+    """소스 경로 단위로 COPY 실행을 직렬화하여 충돌을 방지합니다."""
+
+    def __init__(self):
+        self._lanes: Dict[str, _CopyLane] = {}
+        self._lock = threading.Lock()
+
+    def _normalize_key(self, source_path: Path) -> str:
+        try:
+            return str(source_path.resolve())
+        except Exception:
+            return str(source_path)
+
+    def _lane_for(self, source_path: Path) -> _CopyLane:
+        key = self._normalize_key(source_path)
+        with self._lock:
+            if key not in self._lanes:
+                self._lanes[key] = _CopyLane(key)
+            return self._lanes[key]
+
+    def acquire(
+        self,
+        source_path: Path,
+        config_id: Optional[int],
+        cancel_event: threading.Event,
+        on_wait=None,
+    ) -> bool:
+        if config_id is None:
+            return True
+        lane = self._lane_for(source_path)
+        return lane.acquire(config_id, cancel_event, on_wait=on_wait)
+
+    def release(self, source_path: Path, config_id: Optional[int]) -> None:
+        if config_id is None:
+            return
+        key = self._normalize_key(source_path)
+        with self._lock:
+            lane = self._lanes.get(key)
+        if lane:
+            lane.release(config_id)
+
+    def abandon(self, source_path: Path, config_id: Optional[int]) -> None:
+        if config_id is None:
+            return
+        key = self._normalize_key(source_path)
+        with self._lock:
+            lane = self._lanes.get(key)
+        if lane:
+            lane.abandon(config_id)
+
+
+_copy_coordinator = SourceCopyCoordinator()
+
+
 @dataclass
 class PendingFile:
     path: Path
@@ -537,8 +664,15 @@ def get_existing_backups(destination: Path, patterns: list[str]) -> Dict[str, in
 
 
 class FileSyncManager:
-    def __init__(self, config: SyncConfig, status_callback=None):
+    def __init__(
+        self,
+        config: SyncConfig,
+        status_callback=None,
+        config_id: Optional[int] = None,
+        copy_coordinator: Optional[SourceCopyCoordinator] = None,
+    ):
         self.config = config
+        self.config_id = config_id
         self.running = False
         self._stop_event = threading.Event()
         self._status_lock = threading.Lock()
@@ -560,6 +694,8 @@ class FileSyncManager:
         self._queue_total_bytes = 0
         self._queue_completed_bytes = 0
         self._status_callback = status_callback
+        self._copy_coordinator = copy_coordinator or _copy_coordinator
+        self._last_wait_notice = 0.0
 
     def _reset_queue_progress(self) -> None:
         self._queue_total_bytes = 0
@@ -613,6 +749,53 @@ class FileSyncManager:
             status_snapshot = dict(self._status)
         if notify:
             self._notify_status(status_snapshot)
+
+    def _on_waiting_for_slot(
+        self,
+        config_id: int,
+        active_id: Optional[int],
+        next_candidate: Optional[int],
+    ) -> None:
+        if self.config_id != config_id:
+            return
+        now = time.time()
+        if now - self._last_wait_notice < 1.0:
+            return
+        self._last_wait_notice = now
+        blocker = active_id if active_id and active_id != config_id else next_candidate
+        with self._status_lock:
+            current_file = self._status.get("current_file", "")
+        detail = "동일 소스 경합 대기 중"
+        if blocker and blocker != config_id:
+            detail = f"config {blocker} 작업 완료 대기 중"
+        self._update_status(
+            state="WAITING",
+            current_file=current_file,
+            progress_percent=self._calculate_overall_percent(),
+            details=detail,
+        )
+
+    def _acquire_copy_slot(self) -> bool:
+        if not self._copy_coordinator or self.config_id is None:
+            return True
+        return self._copy_coordinator.acquire(
+            self.config.source,
+            self.config_id,
+            self._stop_event,
+            on_wait=self._on_waiting_for_slot,
+        )
+
+    def _release_copy_slot(self) -> None:
+        if not self._copy_coordinator or self.config_id is None:
+            return
+        self._last_wait_notice = 0.0
+        self._copy_coordinator.release(self.config.source, self.config_id)
+
+    def _abandon_copy_slot(self) -> None:
+        if not self._copy_coordinator or self.config_id is None:
+            return
+        self._copy_coordinator.abandon(self.config.source, self.config_id)
+        self._last_wait_notice = 0.0
 
     def _progress_callback(self, filename: str, copied: int, total: int) -> None:
         detail = f"Copying {filename}"
@@ -870,6 +1053,12 @@ class FileSyncManager:
                             overwrite = True
                             logging.warning("Incomplete backup detected for %s, overwriting.", file_path.name)
 
+                    copy_slot_acquired = self._acquire_copy_slot()
+                    if not copy_slot_acquired:
+                        self._remove_queue_bytes(current_size)
+                        processed_paths.append(file_path)
+                        break
+
                     self._update_status(
                         state="COPYING",
                         current_file=file_path.name,
@@ -891,6 +1080,8 @@ class FileSyncManager:
                         self._remove_queue_bytes(info.last_size)
                         processed_paths.append(file_path)
                         break
+                    finally:
+                        self._release_copy_slot()
 
                     if copied_path:
                         self._existing_backups[file_key] = current_size
@@ -1026,6 +1217,7 @@ class FileSyncManager:
         finally:
             self.running = False
             self._stop_observer()
+            self._abandon_copy_slot()
             self._update_status(state="STOPPED", details="Sync stopped")
 
     def stop(self):
@@ -1033,6 +1225,7 @@ class FileSyncManager:
         self._stop_event.set()
         self.running = False
         self._stop_observer()
+        self._abandon_copy_slot()
         self._update_status(
             state="STOPPED",
             current_file="",

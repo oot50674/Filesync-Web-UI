@@ -183,7 +183,11 @@ def _start_sync_manager(config_row, resume=False):
             is_running = bool(manager_instance and manager_instance.running)
             _emit_status_event(config_id, is_running, status or {})
 
-        manager = FileSyncManager(sync_config, status_callback=status_callback)
+        manager = FileSyncManager(
+            sync_config,
+            status_callback=status_callback,
+            config_id=config_id,
+        )
         manager_holder['manager'] = manager
         thread = threading.Thread(target=manager.run, daemon=True)
         thread.start()

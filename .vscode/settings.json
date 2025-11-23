@@ -1,0 +1,10 @@
+{
+  "editor.semanticTokenColorCustomizations": {},
+  "editor.codeActionsOnSave": {},
+  "[css]": {
+    "editor.validate": true
+  },
+  "files.associations": {
+    "**/app/static/css/tailwind.css": "ignore"
+  }
+}

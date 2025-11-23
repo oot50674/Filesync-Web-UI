@@ -21,33 +21,33 @@
         <div>
             <label for="config-name-{{ form_suffix }}" class="block text-sm font-medium text-gray-700">Config Name</label>
             <input id="config-name-{{ form_suffix }}" type="text" name="name" value="{{ config.name }}"
-                class="mt-1 block w-full border rounded px-3 py-2">
+                class="mt-1 block w-full border border-gray-300 rounded px-3 py-2">
         </div>
         <div>
             <label for="pattern-{{ form_suffix }}" class="block text-sm font-medium text-gray-700">Pattern (쉼표로 구분)</label>
             <input id="pattern-{{ form_suffix }}" type="text" name="pattern" value="{{ config.pattern }}"
                 placeholder="예: *.bak,*.zip"
-                class="mt-1 block w-full border rounded px-3 py-2">
+                class="mt-1 block w-full border border-gray-300 rounded px-3 py-2">
         </div>
     </div>
 
     <div>
         <label for="source-path-{{ form_suffix }}" class="block text-sm font-medium text-gray-700">Source Path</label>
         <input id="source-path-{{ form_suffix }}" type="text" name="source_path" value="{{ config.source_path }}" placeholder="예: /Users/user/Documents"
-            class="mt-1 block w-full border rounded px-3 py-2" required>
+            class="mt-1 block w-full border border-gray-300 rounded px-3 py-2" required>
     </div>
 
     <div>
         <label for="replica-path-{{ form_suffix }}" class="block text-sm font-medium text-gray-700">Replica Path</label>
         <input id="replica-path-{{ form_suffix }}" type="text" name="replica_path" value="{{ config.replica_path }}"
-            placeholder="예: /Users/user/Documents_backup" class="mt-1 block w-full border rounded px-3 py-2" required>
+            placeholder="예: /Users/user/Documents_backup" class="mt-1 block w-full border border-gray-300 rounded px-3 py-2" required>
     </div>
 
     <div id="schedule-retention-row-{{ form_suffix }}" class="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
         <div class="lg:col-span-1">
             <label for="retention-mode-{{ form_suffix }}" class="block text-sm font-medium text-gray-700">Retention Mode</label>
             <select id="retention-mode-{{ form_suffix }}" name="retention_mode"
-                class="mt-1 block w-full border rounded px-3 py-2 select-arrow" x-model="retentionMode">
+                class="mt-1 block w-full border border-gray-300 rounded px-3 py-2 select-arrow" x-model="retentionMode">
                 <option value="days">기간(일)</option>
                 <option value="count">파일 개수</option>
                 <option value="sync">동기화(단방향)</option>
@@ -59,7 +59,7 @@
             <div id="retention-value-wrapper-{{ form_suffix }}" class="space-y-1">
                 <input id="retention-value-{{ form_suffix }}" type="number" name="retention"
                     x-model.number="retentionValue"
-                    class="mt-1 block w-full border rounded px-3 py-2"
+                    class="mt-1 block w-full border border-gray-300 rounded px-3 py-2"
                     min="0"
                     :placeholder="retentionMode === 'count' ? '유지할 파일 개수' : (retentionMode === 'days' ? '유지할 일수' : '')"
                     :disabled="retentionMode === 'sync'">
@@ -71,7 +71,7 @@
     </div>
 
     <div class="pt-4 flex gap-4">
-        <button id="save-config-{{ form_suffix }}" type="submit" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded flex-1">
+        <button id="save-config-{{ form_suffix }}" type="submit" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded border-none flex-1">
             Save Configuration
         </button>
     </div>

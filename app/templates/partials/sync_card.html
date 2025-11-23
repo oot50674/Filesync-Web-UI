@@ -1,6 +1,6 @@
 <div id="sync-card-{{ config.id }}" class="bg-white p-6 rounded-lg shadow-md mb-8"
     x-data="{ isFormOpen: {% if not config.id %}true{% else %}false{% endif %} }">
-    <div id="sync-card-header-{{ config.id }}" class="flex justify-between items-center mb-4 border-b pb-2 cursor-pointer select-none"
+    <div id="sync-card-header-{{ config.id }}" class="flex justify-between items-center mb-4 border-b border-gray-200 pb-2 cursor-pointer select-none"
         @click="isFormOpen = !isFormOpen">
         <div class="flex items-center gap-2">
             <svg id="sync-card-toggle-icon-{{ config.id }}" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"
@@ -24,7 +24,7 @@
     <div class="grid gap-3">
         <!-- Status Section -->
         {% if config.id %}
-        <div id="sync-status-section-{{ config.id }}" class="bg-gray-50 p-4 rounded border">
+        <div id="sync-status-section-{{ config.id }}" class="bg-gray-50 p-4 rounded border border-gray-200">
             {% with config_id=config.id, status=config.status, is_running=config.is_running %}
             {% include 'partials/sync_status.html' %}
             {% endwith %}

@@ -10,7 +10,7 @@
 
     <div class="text-center mt-8 mb-12">
         <button hx-get="/filesync/add" hx-target="#sync-list" hx-swap="beforeend"
-            class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-6 rounded-lg shadow transition duration-200 flex items-center justify-center mx-auto gap-2">
+            class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-6 rounded-lg shadow transition duration-200 flex items-center justify-center mx-auto gap-2 border-none">
             <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                 <path fill-rule="evenodd"
                     d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"
@@ -20,15 +20,15 @@
         </button>
     </div>
 
-    <div class="border-t pt-8 text-center flex items-center justify-center gap-4">
-        <button type="button" class="bg-amber-500 hover:bg-amber-600 text-white font-bold py-2 px-4 rounded"
+    <div class="border-t border-gray-200 pt-8 text-center flex items-center justify-center gap-4">
+        <button type="button" class="bg-amber-500 hover:bg-amber-600 text-white font-bold py-2 px-4 rounded border-none"
             hx-post="/server/restart" hx-trigger="confirmed" hx-swap="none"
             hx-on:htmx:before-request="window.FileSyncApp?.setBadgeOffline?.()"
             hx-on:htmx:after-request="window.FileSyncApp?.handleAfterRequest('서버가 재시작됩니다. 잠시 기다려주세요.', 'info', 1500)"
             onclick="window.FileSyncApp?.confirmAndDispatch(this, '서버를 재시작하시겠습니까? 실행 중인 작업이 잠깐 중단됩니다.', { title: '재시작 확인', okText: '재시작', cancelText: '취소' });">
             🔁 Server Restart
         </button>
-        <button type="button" class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded"
+        <button type="button" class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded border-none"
             hx-post="/server/shutdown" hx-trigger="confirmed" hx-swap="none"
             hx-on:htmx:after-request="window.FileSyncApp?.handleAfterRequest('서버가 종료됩니다.', 'alert', 1000)"
             onclick="window.FileSyncApp?.confirmAndDispatch(this, '서버를 종료하시겠습니까? 실행 중인 모든 작업이 중지됩니다.', { title: '종료 확인', okText: '종료', cancelText: '취소' });">

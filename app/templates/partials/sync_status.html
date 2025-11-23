@@ -33,14 +33,14 @@
             x-show="isRunning"
             @click.prevent="stopSync"
             :disabled="busy"
-            class="bg-red-500 hover:bg-red-600 disabled:opacity-60 text-white font-bold py-2 px-4 rounded sync-status-btn stop-btn">
+            class="bg-red-500 hover:bg-red-600 disabled:opacity-60 text-white font-bold py-2 px-4 rounded border-none sync-status-btn stop-btn">
             Stop Sync
         </button>
         <button
             x-show="!isRunning"
             @click.prevent="startSync"
             :disabled="busy"
-            class="bg-green-500 hover:bg-green-600 disabled:opacity-60 text-white font-bold py-2 px-4 rounded sync-status-btn start-btn">
+            class="bg-green-500 hover:bg-green-600 disabled:opacity-60 text-white font-bold py-2 px-4 rounded border-none sync-status-btn start-btn">
             Start Sync
         </button>
     </div>

@@ -244,6 +244,7 @@ window.syncStatusPanel = (options) => {
         init() {
             this.applyStatus(options.initialStatus || {});
             this.bindSocket();
+            this.refreshStatus();
         },
 
         bindSocket() {
@@ -252,6 +253,9 @@ window.syncStatusPanel = (options) => {
                 this.details = '실시간 연결을 초기화할 수 없습니다.';
                 return;
             }
+            socket.on('connect', () => {
+                this.refreshStatus();
+            });
             socket.on('sync_update', (payload) => {
                 if (!payload || payload.config_id !== this.configId) {
                     return;
@@ -259,6 +263,27 @@ window.syncStatusPanel = (options) => {
                 this.isRunning = Boolean(payload.is_running);
                 this.applyStatus(payload.status || {});
             });
+        },
+
+        refreshStatus() {
+            const endpoint = `/filesync/status/${this.configId}.json`;
+            const requestUrl =
+                typeof app.resolveUrl === 'function' ? app.resolveUrl(endpoint) : endpoint;
+            const fetcher =
+                typeof app.fetchJson === 'function'
+                    ? app.fetchJson(endpoint, { cache: 'no-store' })
+                    : fetch(requestUrl, {
+                          headers: { Accept: 'application/json' },
+                          cache: 'no-store',
+                      }).then((res) => res.json());
+
+            fetcher
+                .then((payload = {}) => {
+                    if (!payload.status) return;
+                    this.isRunning = Boolean(payload.is_running);
+                    this.applyStatus(payload.status);
+                })
+                .catch(() => {});
         },
 
         applyStatus(status) {

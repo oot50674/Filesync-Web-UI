@@ -3,6 +3,8 @@
     "short_name": "FileSync",
     "start_url": "/",
     "display": "standalone",
+    "theme_color": "#1F293C",
+    "background_color": "#1F293C",
     "icons": [
         {
             "src": "favicon.svg",

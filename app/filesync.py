@@ -31,6 +31,7 @@ DEFAULT_PATTERN = "*"
 DEFAULT_RETENTION = 60
 DEFAULT_RETENTION_MODE = "days"
 DEFAULT_SETTLE_SECONDS = 3
+DEFAULT_SCAN_INTERVAL_MINUTES = 10
 COPY_CHUNK_SIZE = 8 * 1024 * 1024
 HISTORY_DIR_NAME = ".history"
 HISTORY_FILE_NAME = "sync_history.json"
@@ -211,6 +212,7 @@ class SyncConfig:
         retention_mode: str = DEFAULT_RETENTION_MODE,
         settle_seconds: int = DEFAULT_SETTLE_SECONDS,
         log_level: str = "INFO",
+        scan_interval_minutes: int = DEFAULT_SCAN_INTERVAL_MINUTES,
     ):
         self.source = source.resolve()
         self.destination = destination.resolve()
@@ -220,6 +222,12 @@ class SyncConfig:
         self.retention_mode = retention_mode if retention_mode in ("days", "count", "sync") else DEFAULT_RETENTION_MODE
         self.settle_seconds = settle_seconds
         self.log_level = log_level
+        try:
+            interval_value = int(scan_interval_minutes)
+        except (TypeError, ValueError):
+            interval_value = DEFAULT_SCAN_INTERVAL_MINUTES
+        self.scan_interval_minutes = max(0, interval_value)
+        self.scan_interval_seconds = self.scan_interval_minutes * 60
 
 
 def parse_args() -> SyncConfig:
@@ -275,6 +283,12 @@ def parse_args() -> SyncConfig:
         help="파일을 복사하기 전에 안정화될 때까지 대기할 시간(초) (기본값: %(default)s).",
     )
     parser.add_argument(
+        "--scan-interval-minutes",
+        type=int,
+        default=DEFAULT_SCAN_INTERVAL_MINUTES,
+        help="주기적 전체 스캔 주기(분). 0이면 비활성화됩니다.",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
@@ -299,6 +313,7 @@ def parse_args() -> SyncConfig:
         retention_mode=args.retention_mode,
         settle_seconds=args.settle_seconds,
         log_level=args.log_level,
+        scan_interval_minutes=args.scan_interval_minutes,
     )
 
 
@@ -696,6 +711,8 @@ class FileSyncManager:
         self._status_callback = status_callback
         self._copy_coordinator = copy_coordinator or _copy_coordinator
         self._last_wait_notice = 0.0
+        self._rescan_interval = max(0, getattr(self.config, "scan_interval_seconds", 0))
+        self._last_rescan_time = 0.0
 
     def _reset_queue_progress(self) -> None:
         self._queue_total_bytes = 0
@@ -837,35 +854,35 @@ class FileSyncManager:
         except Exception:
             logging.exception("Failed to queue delete event: %s", file_path)
 
-    def _register_pending_file(self, file_path: Path, reason: str = "") -> None:
+    def _register_pending_file(self, file_path: Path, reason: str = "") -> bool:
         try:
             normalized_path = Path(file_path).resolve()
         except OSError:
-            return
+            return False
 
         if not normalized_path.exists() or not normalized_path.is_file():
-            return
+            return False
 
         try:
             relative_path = normalized_path.relative_to(self.config.source)
         except ValueError:
-            return
+            return False
 
         if not matches_patterns(normalized_path.name, self.config.patterns):
-            return
+            return False
 
         try:
             stat = normalized_path.stat()
         except FileNotFoundError:
-            return
+            return False
 
         file_key = relative_path.as_posix()
         dest_size = self._existing_backups.get(file_key)
         if dest_size is not None and dest_size == stat.st_size:
-            return
+            return False
 
         if normalized_path in self.pending_files:
-            return
+            return False
 
         if not self.pending_files:
             self._reset_queue_progress()
@@ -886,6 +903,7 @@ class FileSyncManager:
             format_size(stat.st_size),
             len(self.pending_files),
         )
+        return True
 
     def _pending_items_snapshot(self) -> list[tuple[Path, PendingFile]]:
         items = list(self.pending_files.items())
@@ -900,8 +918,8 @@ class FileSyncManager:
                 path = self._event_queue.get_nowait()
             except Empty:
                 break
-            self._register_pending_file(path, reason="변경 감지")
-            added += 1
+            if self._register_pending_file(path, reason="변경 감지"):
+                added += 1
         return added
 
     def _drain_delete_queue(self) -> None:
@@ -1134,6 +1152,24 @@ class FileSyncManager:
                 details="Watching for file changes...",
             )
 
+    def _should_trigger_rescan(self) -> bool:
+        if self._rescan_interval <= 0:
+            return False
+        if self._last_rescan_time == 0.0:
+            self._last_rescan_time = time.time()
+            return False
+        return (time.time() - self._last_rescan_time) >= self._rescan_interval
+
+    def _perform_periodic_rescan(self) -> None:
+        self._last_rescan_time = time.time()
+        matches = snapshot_matching_files(self.config.source, self.config.patterns)
+        added = 0
+        for file_path in matches:
+            if self._register_pending_file(file_path, reason="주기적 스캔"):
+                added += 1
+        if added:
+            logging.info("주기적 스캔 - 신규 파일 %s개 대기열 추가", added)
+
     def _seed_initial_pending(self) -> None:
         initial_matches = snapshot_matching_files(self.config.source, self.config.patterns)
         matches_items = list(initial_matches.items())
@@ -1197,6 +1233,8 @@ class FileSyncManager:
             while self.running and not self._stop_event.is_set():
                 self._drain_event_queue()
                 self._process_delete_events()
+                if self._should_trigger_rescan():
+                    self._perform_periodic_rescan()
 
                 if self.pending_files:
                     self._process_pending_files()

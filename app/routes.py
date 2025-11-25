@@ -20,6 +20,7 @@ from app.db import get_db
 from app.filesync import (
     DEFAULT_RETENTION,
     DEFAULT_RETENTION_MODE,
+    DEFAULT_SCAN_INTERVAL_MINUTES,
     FileSyncManager,
     SyncConfig,
     validate_paths,
@@ -154,6 +155,13 @@ def _start_sync_manager(config_row, resume=False):
     retention_mode = config_data.get('retention_mode') or DEFAULT_RETENTION_MODE
     retention_mode = retention_mode if retention_mode in ("days", "count", "sync") else DEFAULT_RETENTION_MODE
     retention_value = _resolve_retention_value(config_data, retention_mode)
+    interval_raw = config_data.get('interval')
+    try:
+        interval_minutes = int(interval_raw) if interval_raw is not None else DEFAULT_SCAN_INTERVAL_MINUTES
+    except (TypeError, ValueError):
+        interval_minutes = DEFAULT_SCAN_INTERVAL_MINUTES
+    if interval_minutes <= 0:
+        interval_minutes = DEFAULT_SCAN_INTERVAL_MINUTES
 
     try:
         # 경로 사전 검증: 존재하지 않으면 즉시 실패 반환
@@ -168,6 +176,7 @@ def _start_sync_manager(config_row, resume=False):
             pattern=config_data['pattern'],
             retention=retention_value,
             retention_mode=retention_mode,
+            scan_interval_minutes=interval_minutes,
         )
 
         if not logging.getLogger().handlers:
@@ -259,6 +268,13 @@ def index():
         if config['retention_mode'] not in ("days", "count", "sync"):
             config['retention_mode'] = DEFAULT_RETENTION_MODE
         config['retention'] = _resolve_retention_value(config, config['retention_mode'])
+        try:
+            interval_value = int(config.get('interval') or 0)
+        except (TypeError, ValueError):
+            interval_value = DEFAULT_SCAN_INTERVAL_MINUTES
+        if interval_value <= 0:
+            interval_value = DEFAULT_SCAN_INTERVAL_MINUTES
+        config['interval'] = interval_value
         
         # 각 설정에 대한 현재 상태 주입
         is_running, status = _get_status_context(config['id'])
@@ -294,7 +310,13 @@ def update_sync_config():
     source_path = (request.form.get('source_path') or DEFAULT_SOURCE_PATH).strip()
     replica_path = (request.form.get('replica_path') or DEFAULT_REPLICA_PATH).strip()
     pattern = request.form.get('pattern', '*').strip() or '*'
-    interval = int(request.form.get('interval') or 0)
+    interval_raw = request.form.get('interval')
+    try:
+        interval = int(interval_raw) if interval_raw is not None else DEFAULT_SCAN_INTERVAL_MINUTES
+    except (TypeError, ValueError):
+        interval = DEFAULT_SCAN_INTERVAL_MINUTES
+    if interval <= 0:
+        interval = DEFAULT_SCAN_INTERVAL_MINUTES
     retention_mode = request.form.get('retention_mode', DEFAULT_RETENTION_MODE)
     retention_mode = retention_mode if retention_mode in ("days", "count", "sync") else DEFAULT_RETENTION_MODE
     retention_raw = request.form.get('retention')
@@ -355,6 +377,13 @@ def update_sync_config():
     if config['retention_mode'] not in ("days", "count", "sync"):
         config['retention_mode'] = DEFAULT_RETENTION_MODE
     config['retention'] = _resolve_retention_value(config, config['retention_mode'])
+    try:
+        interval_value = int(config.get('interval') or 0)
+    except (TypeError, ValueError):
+        interval_value = DEFAULT_SCAN_INTERVAL_MINUTES
+    if interval_value <= 0:
+        interval_value = DEFAULT_SCAN_INTERVAL_MINUTES
+    config['interval'] = interval_value
 
     restart_error = None
     if was_running:
@@ -388,7 +417,7 @@ def add_sync_config():
         'source_path': DEFAULT_SOURCE_PATH,
         'replica_path': DEFAULT_REPLICA_PATH,
         'pattern': '*',
-        'interval': 0,
+        'interval': DEFAULT_SCAN_INTERVAL_MINUTES,
         'retention': DEFAULT_RETENTION,
         'retention_mode': DEFAULT_RETENTION_MODE
     }

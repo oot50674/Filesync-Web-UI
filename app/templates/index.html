@@ -21,18 +21,24 @@
     </div>
 
     <div class="border-t border-gray-200 pt-8 text-center flex items-center justify-center gap-4">
-        <button type="button" class="bg-amber-500 hover:bg-amber-600 text-white font-bold py-2 px-4 rounded border-none"
+        <button type="button" class="bg-amber-500 hover:bg-amber-600 text-white font-bold py-2 px-4 rounded border-none flex items-center gap-2"
             hx-post="/server/restart" hx-trigger="confirmed" hx-swap="none"
             hx-on:htmx:before-request="window.FileSyncApp?.setBadgeOffline?.()"
             hx-on:htmx:after-request="window.FileSyncApp?.handleAfterRequest('서버가 재시작됩니다. 잠시 기다려주세요.', 'info', 1500)"
             onclick="window.FileSyncApp?.confirmAndDispatch(this, '서버를 재시작하시겠습니까? 실행 중인 작업이 잠깐 중단됩니다.', { title: '재시작 확인', okText: '재시작', cancelText: '취소' });">
-            🔁 Server Restart
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M4 2a1 1 0 011 1v2.101a7.002 7.002 0 0111.601 2.566 1 1 0 11-1.885.666A5.002 5.002 0 005.999 7H9a1 1 0 010 2H4a1 1 0 01-1-1V3a1 1 0 011-1zm.008 9.057a1 1 0 011.276.61A5.002 5.002 0 0014.001 13H11a1 1 0 110-2h5a1 1 0 011 1v5a1 1 0 11-2 0v-2.101a7.002 7.002 0 01-11.601-2.566 1 1 0 01.61-1.276z" clip-rule="evenodd" />
+            </svg>
+            Server Restart
         </button>
-        <button type="button" class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded border-none"
+        <button type="button" class="bg-gray-500 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded border-none flex items-center gap-2"
             hx-post="/server/shutdown" hx-trigger="confirmed" hx-swap="none"
             hx-on:htmx:after-request="window.FileSyncApp?.handleAfterRequest('서버가 종료됩니다.', 'alert', 1000)"
             onclick="window.FileSyncApp?.confirmAndDispatch(this, '서버를 종료하시겠습니까? 실행 중인 모든 작업이 중지됩니다.', { title: '종료 확인', okText: '종료', cancelText: '취소' });">
-            🚫 Server Shutdown
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8 7a1 1 0 00-1 1v4a1 1 0 001 1h4a1 1 0 001-1V8a1 1 0 00-1-1H8z" clip-rule="evenodd" />
+            </svg>
+            Server Shutdown
         </button>
     </div>
 </div>

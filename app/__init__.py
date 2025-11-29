@@ -72,8 +72,8 @@ def create_app():
         db.ensure_schema_upgrades()
 
     # 블루프린트(라우트) 등록
-    from .routes import main
-    app.register_blueprint(main)
+    from . import routes
+    app.register_blueprint(routes.main)
     
     # 테스트 블루프린트 등록
     from .test import test_bp
@@ -81,5 +81,9 @@ def create_app():
 
     # SocketIO 초기화
     socketio.init_app(app, async_mode='threading')
+
+    # 서버 기동 시 활성화된 작업 자동 재개
+    with app.app_context():
+        routes.resume_active_syncs()
 
     return app

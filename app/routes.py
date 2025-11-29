@@ -573,8 +573,7 @@ def server_status_json():
     return jsonify(status)
 
 
-@main.before_app_request
-def resume_sync_if_needed():
+def resume_active_syncs():
     """
     앱 재기동 후 이전에 실행 중이던 동기화를 자동 재개합니다.
     """
@@ -582,5 +581,18 @@ def resume_sync_if_needed():
     # 활성화된 모든 설정 조회
     config_rows = db.execute('SELECT * FROM sync_configs WHERE is_active = 1').fetchall()
     
+    resumed = 0
     for row in config_rows:
-        _start_sync_manager(row, resume=True)
+        started, _ = _start_sync_manager(row, resume=True)
+        if started:
+            resumed += 1
+    if resumed:
+        logger.info("서버 기동 시 활성화 상태 작업 %s개 자동 재개", resumed)
+
+
+@main.before_app_request
+def resume_sync_if_needed():
+    """
+    첫 요청 이전에 재개 로직이 실행되지 않았다면 안전하게 한 번 더 호출합니다.
+    """
+    resume_active_syncs()

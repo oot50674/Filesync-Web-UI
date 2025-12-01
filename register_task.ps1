@@ -1,11 +1,11 @@
 #Requires -Version 3.0
 
-# ÄÜ¼Ö Ãâ·Â ÀÎÄÚµùÀ» UTF-8·Î ¼³Á¤ (ÇÑ±Û ±úÁü ¹æÁö)
+# ì½˜ì†” ì¶œë ¥ ì¸ì½”ë”©ì„ UTF-8ë¡œ ì„¤ì • (í•œê¸€ ê¹¨ì§ ë°©ì§€)
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-# °ü¸®ÀÚ ±ÇÇÑ È®ÀÎ ¹× ÀÚµ¿ ½Â°İ (Self-elevation)
+# ê´€ë¦¬ì ê¶Œí•œ í™•ì¸ ë° ìë™ ìŠ¹ê²© (Self-elevation)
 if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
-    Write-Host "°ü¸®ÀÚ ±ÇÇÑÀÌ ÇÊ¿äÇÕ´Ï´Ù. °ü¸®ÀÚ ±ÇÇÑÀ¸·Î ´Ù½Ã ½ÇÇàÇÕ´Ï´Ù..." -ForegroundColor Yellow
+    Write-Host "ê´€ë¦¬ì ê¶Œí•œì´ í•„ìš”í•©ë‹ˆë‹¤. ê´€ë¦¬ì ê¶Œí•œìœ¼ë¡œ ë‹¤ì‹œ ì‹¤í–‰í•©ë‹ˆë‹¤..." -ForegroundColor Yellow
     Start-Process powershell.exe "-NoProfile -ExecutionPolicy Bypass -File `"$($MyInvocation.MyCommand.Path)`"" -Verb RunAs
     exit
 }
@@ -16,69 +16,69 @@ $VenvDir = Join-Path $ScriptDir "venv"
 $PythonExe = Join-Path $VenvDir "Scripts\pythonw.exe"
 $AppScript = Join-Path $ScriptDir "run.py"
 
-# °¡»óÈ¯°æ È®ÀÎ ¹× ÀÚµ¿ »ı¼º
+# ê°€ìƒí™˜ê²½ í™•ì¸ ë° ìë™ ìƒì„±
 if (!(Test-Path $PythonExe)) {
-    Write-Host "°¡»óÈ¯°æÀ» Ã£À» ¼ö ¾ø½À´Ï´Ù. »ı¼º Áß..."
+    Write-Host "ê°€ìƒí™˜ê²½ì„ ì°¾ì„ ìˆ˜ ì—†ìŠµë‹ˆë‹¤. ìƒì„± ì¤‘..."
     try {
         $SysPython = Get-Command python.exe -ErrorAction Stop | Select-Object -ExpandProperty Source
         & $SysPython -m venv $VenvDir
         
         if (Test-Path $PythonExe) {
-            Write-Host "°¡»óÈ¯°æÀÌ »ı¼ºµÇ¾ú½À´Ï´Ù."
+            Write-Host "ê°€ìƒí™˜ê²½ì´ ìƒì„±ë˜ì—ˆìŠµë‹ˆë‹¤."
             $ReqFile = Join-Path $ScriptDir "requirements.txt"
             if (Test-Path $ReqFile) {
-                Write-Host "ÀÇÁ¸¼ºÀ» ¼³Ä¡ÇÏ´Â Áß..."
+                Write-Host "í•„ìˆ˜ íŒ¨í‚¤ì§€ ì„¤ì¹˜ ì¤‘..."
                 $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
                 & $VenvPython -m pip install -r $ReqFile
             }
         }
     }
     catch {
-        Write-Error "°¡»óÈ¯°æ »ı¼º¿¡ ½ÇÆĞÇß½À´Ï´Ù: $_"
-        Write-Error "½Ã½ºÅÛ PythonÀÌ ¼³Ä¡µÇ¾î ÀÖ´ÂÁö È®ÀÎÇÏ¼¼¿ä."
+        Write-Error "ê°€ìƒí™˜ê²½ ìƒì„±ì— ì‹¤íŒ¨í–ˆìŠµë‹ˆë‹¤: $_"
+        Write-Error "ì‹œìŠ¤í…œì— Pythonì´ ì„¤ì¹˜ë˜ì–´ ìˆëŠ”ì§€ í™•ì¸í•˜ì„¸ìš”."
         exit 1
     }
 }
 
-# pythonw.exe È®ÀÎ
+# pythonw.exe í™•ì¸
 if (-not (Test-Path $PythonExe)) {
-    Write-Error "°¡»óÈ¯°æÀÇ pythonw.exe¸¦ Ã£À» ¼ö ¾ø½À´Ï´Ù: $PythonExe"
+    Write-Error "ê°€ìƒí™˜ê²½ì˜ pythonw.exeë¥¼ ì°¾ì„ ìˆ˜ ì—†ìŠµë‹ˆë‹¤: $PythonExe"
     exit 1
 }
 
-# pythonw.exe·Î Á÷Á¢ ½ÇÇà
+# pythonw.exeë¡œ ì‹¤í–‰í•  ì‘ì—… ì•¡ì…˜ ìƒì„±
 $Action = New-ScheduledTaskAction -Execute $PythonExe `
     -Argument "`"$AppScript`"" `
     -WorkingDirectory $ScriptDir
 
-# Æ®¸®°Å Á¤ÀÇ (·Î±×ÀÎ ½Ã ½ÇÇà)
+# íŠ¸ë¦¬ê±° ìƒì„± (ë¡œê·¸ì˜¨ ì‹œ ì‹¤í–‰)
 $Trigger = New-ScheduledTaskTrigger -AtLogon
 
-# ¼³Á¤ Á¤ÀÇ (¹èÅÍ¸® ¸ğµå¿¡¼­µµ ½ÇÇà, ¼û±è ¼Ó¼º µî)
+# ì‘ì—… ì„¤ì • (ë°°í„°ë¦¬ ëª¨ë“œ í—ˆìš©, ì¤‘ì§€ ê¸ˆì§€, ìˆ¨ê¹€, ì‹¤í–‰ ì œí•œ ì—†ìŒ)
 $Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -Hidden -ExecutionTimeLimit (New-TimeSpan -Days 0)
 
-# ÀÛ¾÷ µî·Ï
+# ì‘ì—… ë“±ë¡
 try {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
     Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings -Description "Filesync Web UI Background Service"
-    Write-Host "ÀÛ¾÷ÀÌ ¼º°øÀûÀ¸·Î µî·ÏµÇ¾ú½À´Ï´Ù!" -ForegroundColor Green
-    Write-Host "pythonw.exe¸¦ »ç¿ëÇÏ¿© ¿ÏÀüÈ÷ ¹é±×¶ó¿îµå¿¡¼­ ½ÇÇàµË´Ï´Ù."
+    Write-Host "ì‘ì—…ì´ ìŠ¤ì¼€ì¤„ëŸ¬ì— ë“±ë¡ë˜ì—ˆìŠµë‹ˆë‹¤!" -ForegroundColor Green
+    Write-Host "pythonw.exeë¡œ ì‹¤í–‰ë˜ì–´ ë°±ê·¸ë¼ìš´ë“œì—ì„œ ë™ì‘í•©ë‹ˆë‹¤."
     
-    # ¹Ù·Î ¼­¹ö ½ÃÀÛ ¿©ºÎ ¹¯±â
-    $startNow = Read-Host "¹Ù·Î ¼­¹ö¸¦ ½ÃÀÛÇÏ½Ã°Ú½À´Ï±î? (Y/N)"
+    # ì¦‰ì‹œ ì‹¤í–‰ ì—¬ë¶€ í™•ì¸ ë° ì‹¤í–‰
+    $startNow = Read-Host "ì¦‰ì‹œ ì„œë²„ë¥¼ ì‹¤í–‰í•˜ì‹œê² ìŠµë‹ˆê¹Œ? (Y/N)"
     if ($startNow -eq 'Y' -or $startNow -eq 'y') {
-        Write-Host "¼­¹ö¸¦ ½ÃÀÛÇÕ´Ï´Ù..."
+        Write-Host "ì„œë²„ë¥¼ ì‹¤í–‰í•©ë‹ˆë‹¤..."
         Start-Process -FilePath $PythonExe -ArgumentList "`"$AppScript`"" -WorkingDirectory $ScriptDir
         
-        # Àá½Ã ±â´Ù¸° ÈÄ ºê¶ó¿ìÀú ¿­±â ¿©ºÎ ¹¯±â
+        # ì ì‹œ ëŒ€ê¸° í›„ ë¸Œë¼ìš°ì € ì˜¤í”ˆ ì—¬ë¶€ í™•ì¸
         Start-Sleep -Seconds 3
-        $openBrowser = Read-Host "ºê¶ó¿ìÀú¿¡¼­ ¿­¾îº¸½Ã°Ú½À´Ï±î? (Y/N)"
+        $openBrowser = Read-Host "ì›¹ë¸Œë¼ìš°ì €ë¥¼ ì—´ì–´ ì ‘ì†í•˜ì‹œê² ìŠµë‹ˆê¹Œ? (Y/N)"
         if ($openBrowser -eq 'Y' -or $openBrowser -eq 'y') {
-            Write-Host "ºê¶ó¿ìÀú¸¦ ¿±´Ï´Ù..."
+            Write-Host "ë¸Œë¼ìš°ì €ë¥¼ ì—½ë‹ˆë‹¤..."
             Start-Process "http://127.0.0.1:5120"
         }
     }
 }
 catch {
-    Write-Error "ÀÛ¾÷ µî·Ï Áß ¿À·ù: $_"
+    Write-Error "ì‘ì—… ë“±ë¡ ì¤‘ ì˜¤ë¥˜: $_"
 }

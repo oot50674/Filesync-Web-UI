@@ -539,6 +539,73 @@ def enforce_retention(
     return _enforce_days_retention(destination, patterns, sync_history, retention)
 
 
+def _iter_backup_entries(destination: Path, patterns: list[str]):
+    """보존 대상이 될 파일/디렉터리 목록을 생성한다.
+
+    기존 로직은 파일만 대상으로 삼았기 때문에 .pbd 확장자를 가진 폴더형 백업이
+    카운트 기준 보존에서 제외되는 문제가 있었다.
+    """
+    if not destination.exists():
+        return
+
+    for file_path in destination.rglob("*"):
+        try:
+            if file_path.is_dir():
+                relative_parts = file_path.relative_to(destination).parts
+                if relative_parts and relative_parts[0] == HISTORY_DIR_NAME:
+                    continue
+                if not matches_patterns(file_path.name, patterns):
+                    continue
+                yield file_path
+            elif file_path.is_file():
+                relative_parts = file_path.relative_to(destination).parts
+                if relative_parts and relative_parts[0] == HISTORY_DIR_NAME:
+                    continue
+                if file_path.suffix == ".part":
+                    continue
+                if not matches_patterns(file_path.name, patterns):
+                    continue
+                yield file_path
+        except Exception:
+            logging.exception("Failed to evaluate retention for %s", file_path)
+
+
+def _resolve_entry_timestamp(path: Path, history_value: Optional[str]) -> datetime:
+    """히스토리 값 또는 파일/디렉터리 mtime으로 대표 타임스탬프 산출."""
+    if history_value:
+        try:
+            return datetime.fromisoformat(history_value)
+        except ValueError:
+            logging.warning("Invalid sync history timestamp for %s", path)
+
+    try:
+        base_mtime = path.stat().st_mtime
+    except FileNotFoundError:
+        return datetime.utcfromtimestamp(0)
+
+    if path.is_file():
+        return datetime.fromtimestamp(base_mtime)
+
+    newest = base_mtime
+    try:
+        for child in path.rglob("*"):
+            try:
+                newest = max(newest, child.stat().st_mtime)
+            except FileNotFoundError:
+                continue
+    except Exception:
+        logging.exception("Failed to scan directory mtime for %s", path)
+    return datetime.fromtimestamp(newest)
+
+
+def _delete_entry(path: Path) -> None:
+    """파일 또는 디렉터리를 안전하게 삭제."""
+    if path.is_dir():
+        shutil.rmtree(path, ignore_errors=False)
+    else:
+        path.unlink()
+
+
 def _enforce_days_retention(
     destination: Path,
     patterns: list[str],
@@ -555,30 +622,13 @@ def _enforce_days_retention(
     history_changed = False
     history_keys_to_remove: set[str] = set()
 
-    for file_path in destination.rglob("*"):
+    for file_path in _iter_backup_entries(destination, patterns):
         try:
-            if not file_path.is_file():
-                continue
-            relative_parts = file_path.relative_to(destination).parts
-            if relative_parts and relative_parts[0] == HISTORY_DIR_NAME:
-                continue
-            if not matches_patterns(file_path.name, patterns):
-                continue
-
             history_key = build_history_key(destination, file_path)
-            synced_at_str = sync_history.get(history_key)
-            synced_at: Optional[datetime] = None
-            if synced_at_str:
-                try:
-                    synced_at = datetime.fromisoformat(synced_at_str)
-                except ValueError:
-                    logging.warning("Invalid sync history timestamp for %s", history_key)
-
-            if synced_at is None:
-                synced_at = datetime.fromtimestamp(file_path.stat().st_mtime)
+            synced_at = _resolve_entry_timestamp(file_path, sync_history.get(history_key))
 
             if synced_at < threshold:
-                file_path.unlink()
+                _delete_entry(file_path)
                 deleted += 1
                 history_keys_to_remove.add(history_key)
                 logging.info("Removed expired backup: %s", file_path)
@@ -608,28 +658,10 @@ def _enforce_count_retention(
 
     file_entries: list[tuple[Path, datetime, str]] = []
 
-    for file_path in destination.rglob("*"):
+    for file_path in _iter_backup_entries(destination, patterns):
         try:
-            if not file_path.is_file():
-                continue
-            relative_parts = file_path.relative_to(destination).parts
-            if relative_parts and relative_parts[0] == HISTORY_DIR_NAME:
-                continue
-            if not matches_patterns(file_path.name, patterns):
-                continue
-
             history_key = build_history_key(destination, file_path)
-            synced_at_str = sync_history.get(history_key)
-            synced_at: Optional[datetime] = None
-            if synced_at_str:
-                try:
-                    synced_at = datetime.fromisoformat(synced_at_str)
-                except ValueError:
-                    logging.warning("Invalid sync history timestamp for %s", history_key)
-
-            if synced_at is None:
-                synced_at = datetime.fromtimestamp(file_path.stat().st_mtime)
-
+            synced_at = _resolve_entry_timestamp(file_path, sync_history.get(history_key))
             file_entries.append((file_path, synced_at, history_key))
         except Exception:
             logging.exception("Failed to evaluate retention for %s", file_path)
@@ -643,7 +675,7 @@ def _enforce_count_retention(
 
     for file_path, _, history_key in targets:
         try:
-            file_path.unlink()
+            _delete_entry(file_path)
             if sync_history.pop(history_key, None) is not None:
                 history_changed = True
             logging.info("Removed overflow backup: %s", file_path)
@@ -1212,6 +1244,20 @@ class FileSyncManager:
             self.config.destination,
             self.config.patterns,
         )
+
+        # 서버/서비스 재기동 시점에도 기존 백업에 대해 보존 정책을 한 번 적용
+        try:
+            history_changed = enforce_retention(
+                self.config.destination,
+                self.config.retention,
+                self.config.patterns,
+                self.sync_history,
+                self.config.retention_mode,
+            )
+            if history_changed:
+                self._persist_history()
+        except Exception:
+            logging.exception("Initial retention enforcement failed.")
 
         try:
             self._start_observer()

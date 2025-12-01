@@ -135,6 +135,18 @@ def _emit_status_event(config_id, is_running, status):
         socketio.emit("sync_update", _status_payload(config_id, is_running, status))
     except Exception:
         logger.exception("Failed to emit sync_update for config %s", config_id)
+
+
+def _emit_system_status(target_sid=None):
+    """전체 또는 특정 소켓으로 시스템 상태를 push합니다."""
+    try:
+        payload = _build_system_status()
+        if target_sid:
+            socketio.emit("system_status", payload, to=target_sid)
+        else:
+            socketio.emit("system_status", payload)
+    except Exception:
+        logger.exception("Failed to emit system_status")
 def _start_sync_manager(config_row, resume=False):
     """
     config_row 정보를 기반으로 FileSyncManager를 기동합니다.
@@ -147,6 +159,8 @@ def _start_sync_manager(config_row, resume=False):
         manager = sync_managers[config_id]['manager']
         if manager.running:
             return True, None
+
+    started_new = False
 
     db = get_db()
     config_data = dict(config_row)
@@ -205,12 +219,15 @@ def _start_sync_manager(config_row, resume=False):
             'manager': manager,
             'thread': thread
         }
+        started_new = True
 
         db.execute('UPDATE sync_configs SET is_active = 1 WHERE id = ?', (config_id,))
         db.commit()
 
         if resume:
             current_app.logger.info(f"Resumed file sync automatically for config {config_id} after restart.")
+        if started_new:
+            _emit_system_status()
         return True, None
     except Exception as exc:
         current_app.logger.error(f"Failed to start sync for config {config_id}: {exc}")
@@ -224,6 +241,7 @@ def _stop_sync_manager(config_id, update_db=True):
 
     update_db=False이면 실행 상태 플래그를 유지한 채로 스레드만 종료합니다.
     """
+    stopped = False
     if config_id in sync_managers:
         entry = sync_managers[config_id]
         manager = entry['manager']
@@ -235,6 +253,7 @@ def _stop_sync_manager(config_id, update_db=True):
             thread.join(timeout=2.0)
             
         del sync_managers[config_id]
+        stopped = True
         
         # DB 상태 업데이트
         if update_db:
@@ -242,7 +261,8 @@ def _stop_sync_manager(config_id, update_db=True):
             db.execute('UPDATE sync_configs SET is_active = 0 WHERE id = ?', (config_id,))
             db.commit()
 
-
+    if stopped:
+        _emit_system_status()
 
 
 # 메인 블루프린트 정의
@@ -588,6 +608,7 @@ def resume_active_syncs():
             resumed += 1
     if resumed:
         logger.info("서버 기동 시 활성화 상태 작업 %s개 자동 재개", resumed)
+        _emit_system_status()
 
 
 @main.before_app_request
@@ -596,3 +617,19 @@ def resume_sync_if_needed():
     첫 요청 이전에 재개 로직이 실행되지 않았다면 안전하게 한 번 더 호출합니다.
     """
     resume_active_syncs()
+
+
+@socketio.on("connect")
+def handle_socket_connect():
+    """
+    새 클라이언트 접속 시 현재 시스템 상태를 즉시 전달합니다.
+    """
+    _emit_system_status(target_sid=request.sid)
+
+
+@socketio.on("system_status_request")
+def handle_system_status_request():
+    """
+    클라이언트의 수동 요청에 따라 시스템 상태를 전달합니다.
+    """
+    _emit_system_status(target_sid=request.sid)

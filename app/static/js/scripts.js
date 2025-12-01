@@ -143,68 +143,83 @@
 // Alpine statusBadge 컴포넌트 (클라이언트 폴링/렌더링)
 window.statusBadge = () => {
     const app = window.FileSyncApp || {};
-    const routes = app.routes || {};
-    const endpoint = routes.serverStatusJson || '/server/status.json';
-
-    const fetchStatusData = () => {
-        if (typeof app.fetchJson === 'function') {
-            return app.fetchJson(endpoint, { cache: 'no-store' });
-        }
-        const url = typeof app.resolveUrl === 'function' ? app.resolveUrl(endpoint) : endpoint;
-        return fetch(url, { cache: 'no-store' }).then((res) => {
-            if (!res.ok) {
-                throw new Error(`HTTP ${res.status}`);
-            }
-            return res.json();
-        });
-    };
 
     return {
         state: '로딩...',
-        detail: '서버 응답 대기 중',
+        detail: '실시간 연결 준비 중',
         badgeClass: 'bg-slate-800 text-slate-200 border-slate-500/60',
         dotClass: 'bg-slate-300',
-        intervalId: null,
-
-        fetchStatus() {
-            return fetchStatusData()
-                .then((payload) => {
-                    this.state = payload.state || 'UNKNOWN';
-                    this.detail = payload.detail || '';
-                    if (payload.tone === 'online') {
-                        this.badgeClass = 'bg-emerald-900/30 text-emerald-100 border-emerald-500/50';
-                        this.dotClass = 'w-2 h-2 rounded-full animate-pulse bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.7)]';
-                    } else if (payload.tone === 'idle') {
-                        this.badgeClass = 'bg-amber-900/30 text-amber-100 border-amber-500/40';
-                        this.dotClass = 'w-2 h-2 rounded-full animate-pulse bg-amber-300 shadow-[0_0_8px_rgba(251,191,36,0.6)]';
-                    } else {
-                        this.badgeClass = 'bg-slate-800 text-slate-200 border-slate-500/60';
-                        this.dotClass = 'w-2 h-2 rounded-full animate-pulse bg-slate-300';
-                    }
-                    if (this.$el) {
-                        this.$el.className = `px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-2 border transition-colors duration-200 ${this.badgeClass}`;
-                    }
-                })
-                .catch(() => {
-                    this.state = '오프라인';
-                    this.detail = '서버와 통신할 수 없음';
-                    this.badgeClass = 'bg-red-900/40 text-red-100 border-red-500/60';
-                    this.dotClass = 'w-2 h-2 rounded-full animate-pulse bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.8)]';
-                    if (this.$el) {
-                        this.$el.className = `px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-2 border transition-colors duration-200 ${this.badgeClass}`;
-                    }
-                });
-        },
+        socket: null,
 
         start() {
             this.$el = this.$el || document.getElementById('system-status-badge');
-            this.fetchStatus();
-            this.intervalId = setInterval(() => this.fetchStatus(), 5000);
+            this.initSocket();
         },
 
-        stop() {
-            if (this.intervalId) {
-                clearInterval(this.intervalId);
+        initSocket() {
+            const socket = typeof app.getSyncSocket === 'function' ? app.getSyncSocket() : null;
+            if (!socket) {
+                this.setOffline('실시간 연결을 초기화할 수 없습니다.');
+                return;
+            }
+
+            this.socket = socket;
+            if (typeof socket.off === 'function') {
+                socket.off('system_status');
+                socket.off('connect');
+                socket.off('disconnect');
+                socket.off('connect_error');
+            }
+
+            socket.on('connect', () => {
+                this.detail = '실시간 연결됨';
+                this.requestStatus();
+            });
+
+            socket.on('system_status', (payload = {}) => {
+                this.applyStatus(payload);
+            });
+
+            const markOffline = (message) => this.setOffline(message);
+            socket.on('disconnect', () => markOffline('연결이 끊어졌습니다.'));
+            socket.on('connect_error', () => markOffline('연결에 실패했습니다.'));
+
+            if (socket.connected) {
+                this.requestStatus();
+            }
+        },
+
+        requestStatus() {
+            if (this.socket && typeof this.socket.emit === 'function') {
+                this.socket.emit('system_status_request');
+            }
+        },
+
+        applyStatus(payload) {
+            this.state = payload.state || 'UNKNOWN';
+            this.detail = payload.detail || '';
+            if (payload.tone === 'online') {
+                this.badgeClass = 'bg-emerald-900/30 text-emerald-100 border-emerald-500/50';
+                this.dotClass = 'w-2 h-2 rounded-full animate-pulse bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.7)]';
+            } else if (payload.tone === 'idle') {
+                this.badgeClass = 'bg-amber-900/30 text-amber-100 border-amber-500/40';
+                this.dotClass = 'w-2 h-2 rounded-full animate-pulse bg-amber-300 shadow-[0_0_8px_rgba(251,191,36,0.6)]';
+            } else {
+                this.badgeClass = 'bg-slate-800 text-slate-200 border-slate-500/60';
+                this.dotClass = 'w-2 h-2 rounded-full animate-pulse bg-slate-300';
+            }
+            if (this.$el) {
+                this.$el.className = `px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-2 border transition-colors duration-200 ${this.badgeClass}`;
+            }
+        },
+
+        setOffline(message) {
+            this.state = '오프라인';
+            this.detail = message || '서버와 통신할 수 없음';
+            this.badgeClass = 'bg-red-900/40 text-red-100 border-red-500/60';
+            this.dotClass = 'w-2 h-2 rounded-full animate-pulse bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.8)]';
+            if (this.$el) {
+                this.$el.className = `px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-2 border transition-colors duration-200 ${this.badgeClass}`;
             }
         },
     };

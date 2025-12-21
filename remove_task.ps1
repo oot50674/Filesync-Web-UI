@@ -1,11 +1,11 @@
 #Requires -Version 3.0
 
-# ÄÜ¼Ö Ãâ·Â ÀÎÄÚµùÀ» UTF-8·Î ¼³Á¤
+# ì½˜ì†” ì¶œë ¥ ì¸ì½”ë”©ì„ UTF-8ë¡œ ì„¤ì •í•©ë‹ˆë‹¤.
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-# °ü¸®ÀÚ ±ÇÇÑ È®ÀÎ ¹× ÀÚµ¿ ½Â°İ
+# ê´€ë¦¬ì ê¶Œí•œ ì‹¤í–‰ ì—¬ë¶€ í™•ì¸ ë° ìë™ ìŠ¹ê²© ì²˜ë¦¬
 if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
-    Write-Host "°ü¸®ÀÚ ±ÇÇÑÀÌ ÇÊ¿äÇÕ´Ï´Ù. °ü¸®ÀÚ ±ÇÇÑÀ¸·Î ´Ù½Ã ½ÇÇàÇÕ´Ï´Ù..." -ForegroundColor Yellow
+    Write-Host "ê´€ë¦¬ì ê¶Œí•œì´ í•„ìš”í•©ë‹ˆë‹¤. ê´€ë¦¬ì ê¶Œí•œìœ¼ë¡œ ë‹¤ì‹œ ì‹¤í–‰í•©ë‹ˆë‹¤..." -ForegroundColor Yellow
     Start-Process powershell.exe "-NoProfile -ExecutionPolicy Bypass -File `"$($MyInvocation.MyCommand.Path)`"" -Verb RunAs
     exit
 }
@@ -13,18 +13,18 @@ if (!([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]:
 $TaskName = "FilesyncWebUI"
 
 try {
-    # ÀÛ¾÷ Á¸Àç ¿©ºÎ È®ÀÎ
+    # ì‘ì—… ìŠ¤ì¼€ì¤„ëŸ¬ì— í•´ë‹¹ ì‘ì—…ì´ ì¡´ì¬í•˜ëŠ”ì§€ í™•ì¸í•©ë‹ˆë‹¤.
     $Task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     
     if ($Task) {
-        # ÀÛ¾÷ »èÁ¦
+        # ì‘ì—…ì„ ë“±ë¡ í•´ì œí•©ë‹ˆë‹¤.
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
-        Write-Host "ÀÛ¾÷ ½ºÄÉÁÙ·¯¿¡¼­ '$TaskName' ÀÛ¾÷ÀÌ ¼º°øÀûÀ¸·Î Á¦°ÅµÇ¾ú½À´Ï´Ù." -ForegroundColor Green
+        Write-Host "ì‘ì—… ìŠ¤ì¼€ì¤„ëŸ¬ì—ì„œ '$TaskName' ì‘ì—…ì´ ì„±ê³µì ìœ¼ë¡œ ì‚­ì œë˜ì—ˆìŠµë‹ˆë‹¤." -ForegroundColor Green
     }
     else {
-        Write-Host "ÀÛ¾÷ ½ºÄÉÁÙ·¯¿¡ '$TaskName' ÀÛ¾÷ÀÌ Á¸ÀçÇÏÁö ¾Ê½À´Ï´Ù." -ForegroundColor Yellow
+        Write-Host "ì‘ì—… ìŠ¤ì¼€ì¤„ëŸ¬ì— '$TaskName' ì‘ì—…ì´ ì¡´ì¬í•˜ì§€ ì•ŠìŠµë‹ˆë‹¤." -ForegroundColor Yellow
     }
 }
 catch {
-    Write-Error "ÀÛ¾÷ Á¦°Å Áß ¿À·ù°¡ ¹ß»ıÇß½À´Ï´Ù: $_"
+    Write-Error "ì‘ì—… ì‚­ì œ ì¤‘ ì˜¤ë¥˜ê°€ ë°œìƒí–ˆìŠµë‹ˆë‹¤: $_"
 }

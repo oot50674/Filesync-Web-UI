@@ -16,6 +16,7 @@ from typing import Dict, Optional
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.api import BaseObserver
+from watchdog.observers.polling import PollingObserver
 
 from app.utils import (
     format_size,
@@ -745,6 +746,9 @@ class FileSyncManager:
         self._last_wait_notice = 0.0
         self._rescan_interval = max(0, getattr(self.config, "scan_interval_seconds", 0))
         self._last_rescan_time = 0.0
+        self._count_retention_cache: Optional[set[Path]] = None
+        self._count_retention_cache_time = 0.0
+        self._count_retention_cache_ttl = 2.0
 
     def _reset_queue_progress(self) -> None:
         self._queue_total_bytes = 0
@@ -886,7 +890,12 @@ class FileSyncManager:
         except Exception:
             logging.exception("Failed to queue delete event: %s", file_path)
 
-    def _register_pending_file(self, file_path: Path, reason: str = "") -> bool:
+    def _register_pending_file(
+        self,
+        file_path: Path,
+        reason: str = "",
+        count_retention_allowed: Optional[set[Path]] = None,
+    ) -> bool:
         try:
             normalized_path = Path(file_path).resolve()
         except OSError:
@@ -902,6 +911,14 @@ class FileSyncManager:
 
         if not matches_patterns(normalized_path.name, self.config.patterns):
             return False
+
+        if self.config.retention_mode == "count" and self.config.retention > 0:
+            if count_retention_allowed is not None:
+                if normalized_path not in count_retention_allowed:
+                    return False
+            else:
+                if not self._is_within_count_retention_limit(normalized_path):
+                    return False
 
         try:
             stat = normalized_path.stat()
@@ -936,6 +953,45 @@ class FileSyncManager:
             len(self.pending_files),
         )
         return True
+
+    def _update_count_retention_cache(self, allowed: set[Path]) -> None:
+        self._count_retention_cache = allowed
+        self._count_retention_cache_time = time.time()
+
+    def _refresh_count_retention_cache(self) -> set[Path]:
+        matches = snapshot_matching_files(self.config.source, self.config.patterns)
+        items = list(matches.items())
+        if not items:
+            allowed: set[Path] = set()
+        else:
+            items.sort(key=lambda item: item[1], reverse=True)
+            limit = min(self.config.retention, len(items))
+            allowed = {path for path, _ in items[:limit]}
+        self._update_count_retention_cache(allowed)
+        return allowed
+
+    def _get_count_retention_allowed(self, force_refresh: bool = False) -> Optional[set[Path]]:
+        if self.config.retention_mode != "count" or self.config.retention <= 0:
+            return None
+        now = time.time()
+        if (
+            not force_refresh
+            and self._count_retention_cache is not None
+            and (now - self._count_retention_cache_time) < self._count_retention_cache_ttl
+        ):
+            return self._count_retention_cache
+        return self._refresh_count_retention_cache()
+
+    def _is_within_count_retention_limit(self, file_path: Path) -> bool:
+        allowed = self._get_count_retention_allowed(force_refresh=False)
+        if allowed is None:
+            return True
+        if file_path in allowed:
+            return True
+        allowed = self._get_count_retention_allowed(force_refresh=True)
+        if allowed is None:
+            return True
+        return file_path in allowed
 
     def _pending_items_snapshot(self) -> list[tuple[Path, PendingFile]]:
         items = list(self.pending_files.items())
@@ -1019,9 +1075,16 @@ class FileSyncManager:
         if removed:
             logging.info("삭제 동기화 처리 완료: %s개 파일", removed)
 
+    def _build_observer(self) -> BaseObserver:
+        """Windows에서는 PollingObserver를 사용해 디렉터리 핸들 잠김을 완화."""
+        if os.name == "nt":
+            logging.info("Windows 환경: PollingObserver 사용(파일 잠금 최소화, 60초 주기).")
+            return PollingObserver(timeout=60)
+        return Observer()
+
     def _start_observer(self) -> None:
         handler = _SyncEventHandler(self)
-        observer = Observer()
+        observer = self._build_observer()
         observer.schedule(handler, str(self.config.source), recursive=True)
         observer.start()
         self._observer = observer
@@ -1195,9 +1258,23 @@ class FileSyncManager:
     def _perform_periodic_rescan(self) -> None:
         self._last_rescan_time = time.time()
         matches = snapshot_matching_files(self.config.source, self.config.patterns)
+        matches_items = list(matches.items())
+        count_allowed = None
+
+        if self.config.retention_mode == "count" and self.config.retention > 0:
+            matches_items.sort(key=lambda item: item[1], reverse=True)
+            limit = min(self.config.retention, len(matches_items))
+            matches_items = matches_items[:limit]
+            count_allowed = {path for path, _ in matches_items}
+            self._update_count_retention_cache(count_allowed)
+
         added = 0
-        for file_path in matches:
-            if self._register_pending_file(file_path, reason="주기적 스캔"):
+        for file_path, _ in matches_items:
+            if self._register_pending_file(
+                file_path,
+                reason="주기적 스캔",
+                count_retention_allowed=count_allowed,
+            ):
                 added += 1
         if added:
             logging.info("주기적 스캔 - 신규 파일 %s개 대기열 추가", added)
@@ -1205,6 +1282,7 @@ class FileSyncManager:
     def _seed_initial_pending(self) -> None:
         initial_matches = snapshot_matching_files(self.config.source, self.config.patterns)
         matches_items = list(initial_matches.items())
+        count_allowed = None
 
         if self.config.retention_mode == "count" and self.config.retention > 0:
             matches_items.sort(key=lambda item: item[1], reverse=True)
@@ -1216,9 +1294,15 @@ class FileSyncManager:
                     len(matches_items),
                 )
             matches_items = matches_items[:limit]
+            count_allowed = {path for path, _ in matches_items}
+            self._update_count_retention_cache(count_allowed)
 
         for file_path, _ in matches_items:
-            self._register_pending_file(file_path, reason="초기 스캔")
+            self._register_pending_file(
+                file_path,
+                reason="초기 스캔",
+                count_retention_allowed=count_allowed,
+            )
 
     def run(self) -> None:
         self._stop_event.clear()
